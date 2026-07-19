@@ -1411,8 +1411,8 @@ function addCustomTag(){
 function clearFlag(u){
   const i=entries.findIndex(e=>e.uid===u); if(i===-1)return;
   entries[i].hasFlag=false; entries[i].flagReason='';
-  // If it was a team flag, also clear isTeam if desired? No — keep team status, just clear flag
-  saveE(); renderResults(); updBadge(); toast('✅ Flag cleared','g');
+  entries[i]._flagSuppressed=true; // prevent recheckTeamFlags from re-setting
+  saveE(true); renderResults(); updBadge(); toast('✅ Flag cleared','g');
 }
 function showDelConfirm(){
   document.getElementById('edit-sbt-main').style.display='none';
@@ -1526,8 +1526,9 @@ function saveEdit(){
 
 // ═══════════════ TEAM FLAG RECHECK ═══════════════
 function recheckTeamFlags(){
-  // Clear previous team-gap flags
+  // Clear previous team-gap flags — but not manually suppressed ones
   entries.forEach(e=>{
+    if(e._flagSuppressed) return; // user manually cleared this flag
     if(e.type==='finish'&&e.hasFlag&&e.flagReason&&
       (e.flagReason.startsWith('Team')||e.flagReason.startsWith('BIB group')||e.flagReason.startsWith('Linked team'))){
       e.hasFlag=false; e.flagReason='';
@@ -1577,15 +1578,15 @@ function recheckTeamFlags(){
     const finishedCount=finished.length;
 
     if(gap>2){
-      // Flag all finished entries — gap too large
+      // Flag all finished entries — gap too large (unless manually suppressed)
       const posList=finished.map(x=>`${x.r.bib}=#${x.e.pos}`).join(', ');
       const reason=`Team "${teamLabel}" (${finishedCount}/${expectedCount} finished): ${posList} — spread of ${gap} positions. Verify team crossed together.`;
-      finished.forEach(({e})=>{ e.hasFlag=true; e.flagReason=reason; });
+      finished.forEach(({e})=>{ if(!e._flagSuppressed){e.hasFlag=true; e.flagReason=reason;} });
     } else if(notFinished.length>0&&finished.length>0){
       // Some members finished, others haven't — flag those who have
       const missing=notFinished.map(x=>x.r.bib).join(', ');
       const reason=`Team "${teamLabel}" incomplete: ${finishedCount}/${expectedCount} finished — still waiting for BIB ${missing}.`;
-      finished.forEach(({e})=>{ e.hasFlag=true; e.flagReason=reason; });
+      finished.forEach(({e})=>{ if(!e._flagSuppressed){e.hasFlag=true; e.flagReason=reason;} });
     }
   });
 }
