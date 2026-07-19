@@ -150,6 +150,7 @@ async function runTest(){
   testUids = [];
   running = true;
   devices = [];
+  window._sendTimes = {};
 
   document.getElementById('devices-card').style.display='block';
   document.getElementById('results-card').style.display='block';
@@ -188,11 +189,11 @@ async function runTest(){
     d.channel = d.supa.channel('race-' + code)
       .on('postgres_changes', {event:'INSERT', schema:'public', table:'entries', filter:`race_code=eq.${code}`},
         payload => {
-          if(payload.new?.device_id !== d.deviceId){ // received from another device
+          if(payload.new?.device_id !== d.deviceId){
             d.received++;
-            const sent_ts = payload.new?._test_ts;
-            if(sent_ts){
-              const lat = Date.now() - sent_ts;
+            const sentAt = window._sendTimes?.[payload.new?.uid];
+            if(sentAt){
+              const lat = Date.now() - sentAt;
               d.latencies.push(lat);
               d.avgLatency = d.latencies.reduce((a,b)=>a+b,0)/d.latencies.length;
             }
@@ -227,6 +228,7 @@ async function runTest(){
       const entryUid = uid();
       testUids.push(entryUid);
       const bib = String(i * 100 + j + 1);
+      const sendTime = Date.now();
       const entry = {
         uid: entryUid,
         race_code: code,
@@ -237,9 +239,11 @@ async function runTest(){
         time: new Date().toLocaleTimeString(),
         pos: j+1,
         is_team: false, has_flag: false, flag_reason: '',
-        tags: [], timestamp: Date.now(),
-        _test_ts: Date.now() // for latency calc
+        tags: [], timestamp: sendTime
       };
+      // Track send times by uid for latency calculation
+      window._sendTimes = window._sendTimes || {};
+      window._sendTimes[entryUid] = sendTime;
       const {error} = await d.supa.from('entries').insert(entry);
       if(!error){
         d.sent++;
