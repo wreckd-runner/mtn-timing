@@ -1278,7 +1278,8 @@ function rec(){
     }
   }
   // Check if any team member is DNF/DNS
-  const dnfMembers=teamMembers.filter(x=>x.status==='DNF'||x.status==='DNS');
+  const teamMemberRunners=teamMemberBibs.map(mb=>runners.find(r=>baseBib(r.bib)===baseBib(mb))).filter(Boolean);
+  const dnfMembers=teamMemberRunners.filter(x=>x.status==='DNF'||x.status==='DNS');
   if(dnfMembers.length){
     hasFlag=true;
     flagReason=(flagReason?flagReason+' ':'')+'Team member '+dnfMembers.map(p=>`${p.bib} (${p.status})`).join(', ')+' — tracking issue.';
