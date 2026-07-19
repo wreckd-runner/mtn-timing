@@ -1246,19 +1246,28 @@ function rec(){
   const base=baseBib(b);
   const prev=entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===base);
   let isTeam=false,hasFlag=false,flagReason='';
-  if(prev.length===1){
+  // Team detection — use teamBibs array (set by autoLinkTeams) or baseBib fallback
+  const rSelf=runners.find(x=>baseBib(x.bib)===base);
+  // Get all team member bibs — from teamBibs array, teamName group, or baseBib pair
+  let teamMemberBibs=[];
+  if(rSelf?.teamBibs?.length){
+    teamMemberBibs=rSelf.teamBibs; // pre-computed by autoLinkTeams
+  } else if(rSelf?.teamName){
+    teamMemberBibs=runners.filter(r=>r.teamName&&r.teamName.trim().toLowerCase()===rSelf.teamName.trim().toLowerCase()&&baseBib(r.bib)!==base).map(r=>r.bib);
+  } else {
+    // A/B bib pairs — same numeric core
+    teamMemberBibs=runners.filter(r=>baseBib(r.bib)===base&&r.bib!==b).map(r=>r.bib);
+    // Also catch entries with same base bib even without runner records
+    entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===base&&e.bib!==b).forEach(e=>{ if(!teamMemberBibs.includes(e.bib)) teamMemberBibs.push(e.bib); });
+  }
+  // Get all existing finish entries for team members
+  const allRelatedFinishes=teamMemberBibs.map(mb=>entries.find(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(mb))).filter(Boolean);
+  if(allRelatedFinishes.length>0){
     isTeam=true;
-    // Mark the partner as team too
-    const fi=entries.findIndex(e=>e.type==='finish'&&baseBib(e.bib)===base);
-    if(fi!==-1)entries[fi].isTeam=true;
-    const gap=pos-(prev[0].pos||0);
-    if(gap>2){hasFlag=true;flagReason=`Team BIB ${base}: ${prev[0].bib} at pos ${prev[0].pos}, ${b} at pos ${pos} (${gap} apart).`;}
-  }else if(prev.length>=2){
-    isTeam=true;hasFlag=true;
-    flagReason=`BIB group ${base} has ${prev.length+1} entries. Positions: ${prev.map(e=>e.pos).join(', ')} + ${pos}.`;
+    allRelatedFinishes.forEach(e=>{ e.isTeam=true; });
   }
   // Check if runner has DNF/DNS — by status OR by tag
-  const rMatch=runners.find(x=>baseBib(x.bib)===base);
+  const rMatch=rSelf;
   if(rMatch){
     const hasDNFStatus=rMatch.status==='DNF'||rMatch.status==='DNS';
     const hasDNFTag=(rMatch.runnerTags||[]).some(t=>/\bDNF\b/i.test(t));
@@ -1268,37 +1277,11 @@ function rec(){
       flagReason=(flagReason?flagReason+' ':'')+'⚠ Runner reported '+reason+' but finish recorded. Verify before accepting.';
     }
   }
-  // Check if team partner is DNF/DNS
-  if(runners.length){
-    const partners=runners.filter(x=>baseBib(x.bib)===base&&x.bib!==b&&(x.status==='DNF'||x.status==='DNS'));
-    if(partners.length){
-      hasFlag=true;
-      const pNames=partners.map(p=>`${p.bib} (${p.status})`).join(', ');
-      flagReason=(flagReason?flagReason+' ':'')+'Team partner '+pNames+' — tracking issue.';
-      // Also flag the partner\'s existing finish entry if they somehow have one
-      partners.forEach(p=>{
-        const pEntry=entries.findIndex(e=>e.type==='finish'&&e.bib===p.bib&&!e.hasFlag);
-        if(pEntry>=0){entries[pEntry].hasFlag=true;entries[pEntry].flagReason='Team partner DNF/DNS — tracking issue.';}
-      });
-    }
-  }
-  // Check linked team partner (different bib numbers e.g. T303+T304)
-  if(runners.length){
-    const rSelf=runners.find(x=>baseBib(x.bib)===base);
-    if(rSelf&&rSelf.teamPartnerBib){
-      const partnerEntry=entries.find(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(rSelf.teamPartnerBib));
-      if(partnerEntry){
-        isTeam=true;
-        // Mark existing partner entry as team too
-        const pi=entries.findIndex(e=>e.uid===partnerEntry.uid);
-        if(pi>=0) entries[pi].isTeam=true;
-        const gap=pos-(partnerEntry.pos||0);
-        if(gap>2){
-          hasFlag=true;
-          flagReason=(flagReason?flagReason+' ':'')+ `Linked team: BIB ${rSelf.teamPartnerBib} at pos ${partnerEntry.pos}, ${b} at pos ${pos} (${gap} apart).`;
-        }
-      }
-    }
+  // Check if any team member is DNF/DNS
+  const dnfMembers=teamMembers.filter(x=>x.status==='DNF'||x.status==='DNS');
+  if(dnfMembers.length){
+    hasFlag=true;
+    flagReason=(flagReason?flagReason+' ':'')+'Team member '+dnfMembers.map(p=>`${p.bib} (${p.status})`).join(', ')+' — tracking issue.';
   }
   const newEntry={uid:uid(),type:'finish',pos,bib:b,time,timestamp:Date.now(),isTeam,hasFlag,flagReason,tags:[],device:timingPoint};
   entries.push(newEntry);
@@ -1542,69 +1525,66 @@ function saveEdit(){
 
 // ═══════════════ TEAM FLAG RECHECK ═══════════════
 function recheckTeamFlags(){
-  // Clear all team-gap flags so we can recalculate cleanly
+  // Clear previous team-gap flags
   entries.forEach(e=>{
     if(e.type==='finish'&&e.hasFlag&&e.flagReason&&
-      (e.flagReason.startsWith('Team BIB')||e.flagReason.startsWith('BIB group')||e.flagReason.startsWith('Linked team'))){
+      (e.flagReason.startsWith('Team')||e.flagReason.startsWith('BIB group')||e.flagReason.startsWith('Linked team'))){
       e.hasFlag=false; e.flagReason='';
     }
   });
 
-  const checked=new Set();
-
-  // ── A/B suffix teams (same numeric core) ─────────────────────────────
-  entries.filter(e=>e.type==='finish').forEach(e=>{
-    const base=baseBib(e.bib);
-    if(checked.has(base)) return;
-    checked.add(base);
-    const grp=entries.filter(x=>x.type==='finish'&&baseBib(x.bib)===base).sort((a,b)=>a.pos-b.pos);
-    if(grp.length===2){
-      grp.forEach(x=>x.isTeam=true);
-      const gap=grp[1].pos-grp[0].pos;
-      if(gap>2){
-        const reason=`Team BIB ${base}: ${grp[0].bib} at pos ${grp[0].pos}, ${grp[1].bib} at pos ${grp[1].pos} (${gap} apart).`;
-        grp.forEach(x=>{x.hasFlag=true; x.flagReason=reason;});
-      }
-    } else if(grp.length>2){
-      const reason=`BIB group ${base} has ${grp.length} entries. Positions: ${grp.map(x=>x.pos).join(', ')}.`;
-      grp.forEach(x=>{x.isTeam=true; x.hasFlag=true; x.flagReason=reason;});
-    }
+  // Build team groups from runners — teamName groups + baseBib pairs
+  const teamMap=new Map(); // groupKey → [runner records]
+  runners.forEach(r=>{
+    const key=r.teamName?'name:'+r.teamName.trim().toLowerCase():'bib:'+baseBib(r.bib);
+    if(!teamMap.has(key)) teamMap.set(key,[]);
+    teamMap.get(key).push(r);
   });
 
-  // ── Explicitly linked teams (teamLink uid OR runner.teamPartnerBib) ───
-  const linkedChecked=new Set();
-  entries.filter(e=>e.type==='finish').forEach(e=>{
-    if(linkedChecked.has(e.uid)) return;
+  const checkedBibs=new Set();
 
-    // Find partner entry — first via teamLink uid, then via runner's teamPartnerBib
-    let partner=null;
-    if(e.teamLink){
-      partner=entries.find(x=>x.uid===e.teamLink);
-    }
-    if(!partner&&runners.length){
-      const r=runners.find(x=>baseBib(x.bib)===baseBib(e.bib));
-      if(r&&r.teamPartnerBib){
-        partner=entries.find(x=>x.type==='finish'&&baseBib(x.bib)===baseBib(r.teamPartnerBib));
-        // Ensure teamLink is set for future checks
-        if(partner&&!e.teamLink){
-          e.teamLink=partner.uid; partner.teamLink=e.uid;
-          e.isTeam=true; partner.isTeam=true;
-        }
-      }
-    }
+  teamMap.forEach((teamRunners, key)=>{
+    if(teamRunners.length<2) return;
 
-    if(!partner||linkedChecked.has(partner.uid)) return;
-    // Skip if already handled by A/B logic
-    if(baseBib(e.bib)===baseBib(partner.bib)) return;
+    // Get all finish entries for this team
+    const teamEntries=teamRunners.map(r=>{
+      const e=entries.find(x=>x.type==='finish'&&baseBib(x.bib)===baseBib(r.bib));
+      return {r, e};
+    });
 
-    linkedChecked.add(e.uid); linkedChecked.add(partner.uid);
-    const gap=Math.abs((e.pos||0)-(partner.pos||0));
+    // Skip if we've already processed any of these bibs
+    const bases=teamRunners.map(r=>baseBib(r.bib));
+    if(bases.some(b=>checkedBibs.has(b))) return;
+    bases.forEach(b=>checkedBibs.add(b));
+
+    // Mark all entries as team
+    teamEntries.forEach(({e})=>{ if(e) e.isTeam=true; });
+
+    // Get finished members
+    const finished=teamEntries.filter(x=>x.e).sort((a,b)=>(a.e.pos||0)-(b.e.pos||0));
+    const notFinished=teamEntries.filter(x=>!x.e);
+
+    if(finished.length<2) return; // not enough finishes to compare yet
+
+    // Calculate gap between first and last finisher in this team
+    const firstPos=finished[0].e.pos||0;
+    const lastPos=finished[finished.length-1].e.pos||0;
+    const gap=lastPos-firstPos;
+    const teamLabel=teamRunners[0].teamName||`BIB group ${bases[0]}`;
+    const teamSize=teamRunners.length;
+    const expectedCount=teamSize;
+    const finishedCount=finished.length;
+
     if(gap>2){
-      const eDisp=(runners.find(x=>baseBib(x.bib)===baseBib(e.bib))||{bib:e.bib}).bib;
-      const pDisp=(runners.find(x=>baseBib(x.bib)===baseBib(partner.bib))||{bib:partner.bib}).bib;
-      const reason=`Linked team: BIB ${eDisp} pos #${e.pos}, BIB ${pDisp} pos #${partner.pos} (${gap} apart).`;
-      e.hasFlag=true; e.flagReason=reason;
-      partner.hasFlag=true; partner.flagReason=reason;
+      // Flag all finished entries — gap too large
+      const posList=finished.map(x=>`${x.r.bib}=#${x.e.pos}`).join(', ');
+      const reason=`Team "${teamLabel}" (${finishedCount}/${expectedCount} finished): ${posList} — spread of ${gap} positions. Verify team crossed together.`;
+      finished.forEach(({e})=>{ e.hasFlag=true; e.flagReason=reason; });
+    } else if(notFinished.length>0&&finished.length>0){
+      // Some members finished, others haven't — flag those who have
+      const missing=notFinished.map(x=>x.r.bib).join(', ');
+      const reason=`Team "${teamLabel}" incomplete: ${finishedCount}/${expectedCount} finished — still waiting for BIB ${missing}.`;
+      finished.forEach(({e})=>{ e.hasFlag=true; e.flagReason=reason; });
     }
   });
 }
@@ -1625,7 +1605,12 @@ function renderResults(){
     if(r) return r.status!=='DNF';
     return !(e.tags||[]).some(t=>/\bDNF\b/i.test(t));
   }).length;
-  const teams=new Set(ownEntries.filter(e=>e.isTeam).map(e=>baseBib(e.bib))).size;
+  // Count unique teams — by teamName or baseBib
+  const teamKeys=new Set(ownEntries.filter(e=>e.isTeam).map(e=>{
+    const r=runners.find(x=>baseBib(x.bib)===baseBib(e.bib));
+    return r?.teamName?'name:'+r.teamName.trim().toLowerCase():'bib:'+baseBib(e.bib);
+  }));
+  const teams=teamKeys.size;
   const flags=ownEntries.filter(e=>e.hasFlag).length;
   const logs=ownEntries.filter(e=>e.type==='log').length;
   const inField=runners.filter(r=>r.status!=='DNF'&&r.status!=='DNS').length;
@@ -1695,12 +1680,13 @@ function renderResults(){
           rBest.notes       ? {l:'Notes',v:rBest.notes} : null,
         ].filter(Boolean);
         detail=items.map(it=>`<div class="rd-item"><span class="rd-lbl">${esc(it.l)}</span><span class="rd-val${it.al?' rd-al':''}">${esc(it.v)}</span></div>`).join('');
-        // Show partner details if team
+        // Show all team members
         if(rOthers.length){
+          const teamLabel=rBest.teamName?`Team: ${esc(rBest.teamName)}`:`Team (${rOthers.length+1} members)`;
+          detail+=`<div class="rd-item" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--bdr2);width:100%;"><span class="rd-lbl" style="color:var(--acc);">${teamLabel}</span></div>`;
           rOthers.forEach(rp=>{
-            const gpLabel={M:'♂ Male',F:'♀ Female',MX:'⚡ Mixed',NB:'◈ Non-binary'}[rp.gender]||'';
-            const pEntry=entries.find(x=>x.type==='finish'&&baseBib(x.bib)===baseBib(rp.bib)&&x.bib!==e.bib);
-            detail+=`<div class="rd-item" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--bdr2);width:100%;"><span class="rd-lbl">Partner ${esc(rp.bib)}</span><span class="rd-val">${esc(rp.name||'—')}${pEntry?` · Pos #${pEntry.pos} @ ${pEntry.time}`:' · not yet finished'}</span></div>`;
+            const pEntry=entries.find(x=>x.type==='finish'&&baseBib(x.bib)===baseBib(rp.bib));
+            detail+=`<div class="rd-item"><span class="rd-lbl">${esc(rp.bib)}</span><span class="rd-val">${esc(rp.name||'—')}${pEntry?` · #${pEntry.pos} @ ${pEntry.time}`:'<em style="color:var(--mut)"> · pending</em>'}</span></div>`;
             if(rp.conditions) detail+=`<div class="rd-item"><span class="rd-lbl">Conditions</span><span class="rd-val rd-al">${esc(rp.conditions)}</span></div>`;
           });
         }
@@ -1819,56 +1805,47 @@ function toggleRow(id, tr){
 
 // ═══════════════ AUTO TEAM PAIRING ═══════════════
 function autoLinkTeams(){
-  // Group by numeric core (baseBib) AND by team name
-  const groups={};
-  runners.forEach((r,i)=>{
-    const b=baseBib(r.bib);
-    if(!groups[b])groups[b]=[];
-    groups[b].push({r,i});
-  });
-  // Also group by team name (if set) — team name overrides bib-based pairing
-  const teamGroups={};
+  // Build team groups — two sources:
+  // 1. teamName field (any size group)
+  // 2. A/B bib suffix pairs (same numeric core, different bib)
+  const teamGroups={}; // key → [{r, i}]
+
+  // Group by teamName (any size, no limit)
   runners.forEach((r,i)=>{
     if(!r.teamName) return;
-    const k=r.teamName.trim().toLowerCase();
-    if(!teamGroups[k])teamGroups[k]=[];
+    const k='name:'+r.teamName.trim().toLowerCase();
+    if(!teamGroups[k]) teamGroups[k]=[];
     teamGroups[k].push({r,i});
   });
-  // Link by team name first (exactly 2 runners with same team name)
+  // Group by baseBib for A/B pairs (only if no teamName)
+  runners.forEach((r,i)=>{
+    if(r.teamName) return; // already grouped by name
+    const b=baseBib(r.bib);
+    if(!b) return;
+    const k='bib:'+b;
+    if(!teamGroups[k]) teamGroups[k]=[];
+    teamGroups[k].push({r,i});
+  });
+
+  // For each group, mark all members as team and store teamName as the group key
   Object.values(teamGroups).forEach(grp=>{
-    if(grp.length!==2) return;
-    const [a,b]=grp;
-    if(a.r.teamPartnerBib===b.r.bib&&b.r.teamPartnerBib===a.r.bib) return;
-    runners[a.i].teamPartnerBib=b.r.bib;
-    runners[b.i].teamPartnerBib=a.r.bib;
-    const eA=entries.find(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(a.r.bib));
-    const eB=entries.find(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(b.r.bib));
-    if(eA&&eB&&(!eA.teamLink||!eB.teamLink)){
-      eA.teamLink=eB.uid; eB.teamLink=eA.uid;
-      eA.isTeam=true; eB.isTeam=true;
-    }
+    if(grp.length<2) return;
+    const groupBibs=grp.map(x=>x.r.bib);
+    grp.forEach(({r,i})=>{
+      // Store group members on runner (all other bibs in team)
+      runners[i].teamBibs=groupBibs.filter(b=>b!==r.bib);
+      // Keep teamPartnerBib for 2-person teams (backwards compat)
+      if(grp.length===2) runners[i].teamPartnerBib=groupBibs.find(b=>b!==r.bib)||'';
+      else runners[i].teamPartnerBib=''; // clear for larger groups
+    });
+    // Mark finish entries as team entries
+    grp.forEach(({r})=>{
+      const e=entries.find(x=>x.type==='finish'&&baseBib(x.bib)===baseBib(r.bib));
+      if(e) e.isTeam=true;
+    });
   });
-  let linked=0;
-  Object.values(groups).forEach(grp=>{
-    if(grp.length!==2) return; // only auto-pair exact pairs
-    const [a,b]=grp;
-    if(a.r.bib===b.r.bib) return; // identical bibs — not a pair
-    // Already linked correctly? Skip
-    if(a.r.teamPartnerBib===b.r.bib&&b.r.teamPartnerBib===a.r.bib) return;
-    // Link them
-    runners[a.i].teamPartnerBib=b.r.bib;
-    runners[b.i].teamPartnerBib=a.r.bib;
-    // Also link finish entries if both have results (match by baseBib since entry may lack prefix)
-    const eA=entries.find(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(a.r.bib));
-    const eB=entries.find(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(b.r.bib));
-    if(eA&&eB&&eA.uid!==eB.uid&&(!eA.teamLink||!eB.teamLink)){
-      eA.teamLink=eB.uid; eB.teamLink=eA.uid;
-      eA.isTeam=true; eB.isTeam=true;
-    }
-    linked++;
-  });
-  if(linked){ saveR(); if(entries.some(e=>e.teamLink)) saveE(); }
-  return linked;
+
+  saveR(true); if(entries.some(e=>e.isTeam)) saveE(true);
 }
 
 // ═══════════════ RUNNER TEAM LINK ═══════════════
@@ -1879,16 +1856,41 @@ function openRunnerTeamLink(i){
   document.getElementById('rl-preview').textContent='';
   const cur=document.getElementById('rl-current');
   const unlinkBtn=document.getElementById('rl-unlink-btn');
-  if(r.teamPartnerBib){
-    const tp=runners.find(x=>x.bib===r.teamPartnerBib);
-    cur.innerHTML=`Currently linked with <strong>${esc(r.teamPartnerBib)}</strong>${tp&&tp.name?' — '+esc(tp.name):''}`;
+  // Show all current team members
+  const teamBibs=r.teamBibs?.length?r.teamBibs:r.teamPartnerBib?[r.teamPartnerBib]:[];
+  if(teamBibs.length){
+    const memberHtml=teamBibs.map(tb=>{
+      const tm=runners.find(x=>x.bib===tb);
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bdr2);">
+        <span><strong>${esc(tb)}</strong>${tm&&tm.name?' — '+esc(tm.name):''}</span>
+        <button onclick="unlinkTeamMember(${i},'${esc(tb)}')" style="background:none;border:none;color:#b02020;cursor:pointer;font-size:.75rem;padding:0 4px;">✕ Remove</button>
+      </div>`;
+    }).join('');
+    cur.innerHTML=`<div style="font-size:.72rem;font-weight:600;color:var(--acc);margin-bottom:4px;">Team members (${teamBibs.length+1} total):</div>${memberHtml}`;
     unlinkBtn.style.display='inline-flex';
+    unlinkBtn.textContent='✕ Remove All';
   } else {
-    cur.textContent='No team partner linked yet.';
+    cur.innerHTML='<span style="color:var(--mut);font-size:.75rem;">No team members linked yet.</span>';
     unlinkBtn.style.display='none';
   }
   showOvl('ovl-runner-link');
   setTimeout(()=>document.getElementById('rl-bib').focus(),100);
+}
+
+function unlinkTeamMember(i, removeBib){
+  const r=runners[i]; if(!r) return;
+  // Remove from this runner's teamBibs
+  r.teamBibs=(r.teamBibs||[]).filter(b=>b!==removeBib);
+  if(r.teamPartnerBib===removeBib) r.teamPartnerBib='';
+  // Remove this runner from the other runner's teamBibs
+  const oi=runners.findIndex(x=>x.bib===removeBib);
+  if(oi>=0){
+    runners[oi].teamBibs=(runners[oi].teamBibs||[]).filter(b=>b!==r.bib);
+    if(runners[oi].teamPartnerBib===r.bib) runners[oi].teamPartnerBib='';
+  }
+  recheckTeamFlags(); saveR(); renderRunners();
+  openRunnerTeamLink(i); // refresh modal
+  toast(`Removed ${removeBib} from team`,'y');
 }
 function previewRunnerLink(val){
   const prev=document.getElementById('rl-preview');
@@ -1905,48 +1907,41 @@ function previewRunnerLink(val){
 function linkRunnerTeam(){
   const i=parseInt(document.getElementById('rl-idx').value);
   const partnerBib=document.getElementById('rl-bib').value.trim();
-  if(!partnerBib){toast('Enter a partner bib','');return;}
+  if(!partnerBib){toast('Enter a bib to add to the team','');return;}
   const pi=runners.findIndex(r=>r.bib.toLowerCase()===partnerBib.toLowerCase());
   if(pi===-1){toast('Runner not found','r');return;}
   if(pi===i){toast('Cannot link to self','r');return;}
-  // Set teamPartnerBib on both runners
-  runners[i].teamPartnerBib=runners[pi].bib;
-  runners[pi].teamPartnerBib=runners[i].bib;
-  // Also link finish entries if both have finished
-  const myEntry=entries.find(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(runners[i].bib));
-  const partnerEntry=entries.find(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(runners[pi].bib));
-  if(myEntry&&partnerEntry){
-    myEntry.teamLink=partnerEntry.uid; partnerEntry.teamLink=myEntry.uid;
-    myEntry.isTeam=true; partnerEntry.isTeam=true;
-    const gap=Math.abs((myEntry.pos||0)-(partnerEntry.pos||0));
-    if(gap>2){
-      const reason=`Linked team: BIB ${myEntry.bib} pos #${myEntry.pos}, BIB ${partnerEntry.bib} pos #${partnerEntry.pos} (${gap} apart).`;
-      myEntry.hasFlag=true; myEntry.flagReason=reason;
-      partnerEntry.hasFlag=true; partnerEntry.flagReason=reason;
-    }
-    saveE();
-  }
-  saveR(); renderRunners(); renderReg(); renderResults(); updBadge();
-  closeOvl('ovl-runner-link');
-  toast(`👥 ${runners[i].bib} linked with ${runners[pi].bib}`,'b');
+  // Build full team: all existing members + new member
+  const existingBibs=[runners[i].bib,...(runners[i].teamBibs||[])];
+  const newBibs=[runners[pi].bib,...(runners[pi].teamBibs||[])];
+  const allBibs=[...new Set([...existingBibs,...newBibs])];
+  allBibs.forEach(bib_=>{
+    const ri=runners.findIndex(r=>r.bib===bib_);
+    if(ri<0) return;
+    runners[ri].teamBibs=allBibs.filter(b=>b!==bib_);
+    runners[ri].teamPartnerBib=runners[ri].teamBibs.length===1?runners[ri].teamBibs[0]:'';
+  });
+  recheckTeamFlags(); saveR(); renderRunners(); renderReg(); renderResults(); updBadge();
+  openRunnerTeamLink(i);
+  toast(`👥 ${runners[pi].bib} added — team of ${allBibs.length}`,'b');
 }
+
 function unlinkRunnerTeam(){
   const i=parseInt(document.getElementById('rl-idx').value);
-  const pi=runners.findIndex(r=>r.bib===runners[i].teamPartnerBib);
-  // Clear runner links
-  const partnerBib=runners[i].teamPartnerBib;
-  runners[i].teamPartnerBib='';
-  if(pi>=0) runners[pi].teamPartnerBib='';
-  // Clear entry links too
+  const r=runners[i]; if(!r) return;
+  const allBibs=[r.bib,...(r.teamBibs||[])];
+  allBibs.forEach(bib_=>{
+    const ri=runners.findIndex(x=>x.bib===bib_);
+    if(ri>=0){ runners[ri].teamBibs=[]; runners[ri].teamPartnerBib=''; }
+  });
   entries.forEach(e=>{
-    if(e.type==='finish'&&(baseBib(e.bib)===baseBib(runners[i].bib)||(pi>=0&&baseBib(e.bib)===baseBib(runners[pi].bib)))){
-      e.teamLink=''; e.isTeam=false;
-      if(e.flagReason&&e.flagReason.includes('Linked team')){e.hasFlag=false;e.flagReason='';}
+    if(e.type==='finish'&&allBibs.some(b=>baseBib(b)===baseBib(e.bib))){
+      e.teamLink=''; e.isTeam=false; e.hasFlag=false; e.flagReason='';
     }
   });
-  saveR(); saveE(); renderRunners(); renderResults(); updBadge();
+  saveE(); saveR(); renderRunners(); renderReg(); renderResults(); updBadge();
   closeOvl('ovl-runner-link');
-  toast('Team link removed','y');
+  toast('Team unlinked','y');
 }
 
 
@@ -2857,12 +2852,23 @@ function renderRunners(){
         ${r.teamPartnerBib?(()=>{const tp=runners.find(x=>x.bib===r.teamPartnerBib);return `<div style="font-size:.63rem;color:#1a4a8a;margin-top:2px;font-family:'DM Mono',monospace;">👥 ${esc(r.teamPartnerBib)}${tp&&tp.name?' — '+esc(tp.name):''}</div>`;})():''}
         <div class="rc-fi ${fins.length?'done':r.status?'pend':'pend'}">${fins.length?'✅ Pos '+fins.map(f=>`#${f.pos} @ ${f.time}`).join(', '):r.status==='DNS'?'🚫 Did Not Start':r.status==='DNF'?'❌ Did Not Finish':'⏳ Not yet finished'}</div>
         ${(()=>{
-          // Show splits from other timing points (received via hub push)
+          // Show all team members
+          const mates=(r.teamBibs&&r.teamBibs.length)?r.teamBibs:(r.teamPartnerBib?[r.teamPartnerBib]:[]);
+          let html='';
+          if(mates.length){
+            html='<div style="font-size:.63rem;color:#1a4a8a;margin-top:2px;">👥 '+
+              mates.map(tb=>{
+                const tm=runners.find(x=>x.bib===tb);
+                const te=entries.find(x=>x.type==='finish'&&baseBib(x.bib)===baseBib(tb));
+                return esc(tb)+(tm&&tm.name?' '+esc(tm.name):'')+(te?' ✅#'+te.pos:'');
+              }).join(' · ')+'</div>';
+          }
+          // Splits from other timing points
           const rs=window._remoteSplits||{};
           const splits=Object.values(rs).filter(s=>s.type==='finish'&&baseBib(s.bib)===baseBib(r.bib));
-          if(!splits.length) return '';
           splits.sort((a,b)=>a.time.localeCompare(b.time));
-          return splits.map(s=>`<div style="font-size:.6rem;color:#1a4a8a;font-family:'DM Mono',monospace;margin-top:1px;">📍 ${esc(s.device)} @ ${s.time}</div>`).join('');
+          html+=splits.map(s=>`<div style="font-size:.6rem;color:#1a4a8a;font-family:'DM Mono',monospace;margin-top:1px;">📍 ${esc(s.device)} @ ${s.time}</div>`).join('');
+          return html;
         })()}
       </div>
       <div class="rc-bts">
