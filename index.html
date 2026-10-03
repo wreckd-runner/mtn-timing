@@ -860,15 +860,19 @@ tbody tr.rdata:active{background:#f0f0ea;}
           </div>
         </div>
 
-        <!-- DNS from satellite -->
+        <!-- DNF/DNS from satellite / radio -->
         <div style="background:var(--surf2);border:1px solid var(--bdr);border-radius:8px;padding:12px;">
-          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:6px;">DNS Updates</div>
-          <div style="font-size:.73rem;color:var(--mut2);margin-bottom:10px;line-height:1.4;">If you receive a DNS message over satellite (e.g. "DNS 105, 202"), enter the bib numbers below to mark them as Did Not Start.</div>
-          <div style="display:flex;gap:6px;">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:6px;">DNF / DNS Updates</div>
+          <div style="font-size:.73rem;color:var(--mut2);margin-bottom:10px;line-height:1.4;">If you receive communications of withdrawals (e.g. "DNS/DNF 105, 202"), enter below to withdraw from the participants list and update the headcount.</div>
+          <div style="display:flex;gap:6px;margin-bottom:6px;">
+            <div style="display:flex;gap:4px;flex-shrink:0;">
+              <button id="dnf-dns-toggle-dns" class="btn" onclick="setDNFDNSMode('DNS')" style="padding:6px 10px;font-size:.72rem;background:#6a5000;color:#fff;border-color:#6a5000;">DNS</button>
+              <button id="dnf-dns-toggle-dnf" class="btn" onclick="setDNFDNSMode('DNF')" style="padding:6px 10px;font-size:.72rem;background:var(--surf2);color:var(--mut2);border-color:var(--bdr);">DNF</button>
+            </div>
             <input class="fld" type="text" id="dns-satellite-input" placeholder="e.g. 105, 202, 303" style="flex:1;font-size:.85rem;text-transform:uppercase;font-family:'DM Mono',monospace;">
-            <button class="btn" onclick="applyDNSFromSatellite()" style="padding:8px 12px;font-size:.78rem;background:#6a5000;color:#fff;border-color:#6a5000;flex-shrink:0;">Apply DNS</button>
+            <button class="btn" onclick="applyDNFDNSFromSatellite()" style="padding:8px 12px;font-size:.78rem;background:#6a5000;color:#fff;border-color:#6a5000;flex-shrink:0;">Apply</button>
           </div>
-          <div id="dns-satellite-result" style="font-size:.72rem;color:var(--mut);margin-top:6px;min-height:14px;"></div>
+          <div id="dns-satellite-result" style="font-size:.72rem;color:var(--mut);margin-top:2px;min-height:14px;"></div>
         </div>
 
         <!-- Export results -->
@@ -1865,9 +1869,13 @@ function recheckTeamFlags(){
 // ═══════════════ RESULTS ═══════════════
 function renderResults(){
   recheckTeamFlags();
-  // Hard filter — Results ALWAYS shows only this device's entries
-  // This is the final safety net regardless of how entries got into the array
+  // Hard filter — Results table shows only this device's entries
   const ownEntries=entries.filter(e=>!e.device||e.device===timingPoint);
+  // Issue detection on hub uses ALL finish data (own entries + every remote split)
+  // On marshal devices this is just ownEntries again
+  const allFinishEntries=isHub
+    ? [...ownEntries, ...Object.values(window._remoteSplits||{}).filter(e=>e.type==='finish')]
+    : ownEntries;
   const body=document.getElementById('rbody');
   const empty=document.getElementById('rempty');
   const dsec=document.getElementById('dsec');
@@ -1978,19 +1986,20 @@ function renderResults(){
   // Unknown bibs: finish entries whose bib has no matching runner (only when runners list is non-empty)
   let unknownHtml='';
   if(runners.length>0){
-    const finishEntries=ownEntries.filter(e=>e.type==='finish');
     const unknownBibs=[...new Set(
-      finishEntries
+      allFinishEntries
         .filter(e=>!runners.some(r=>baseBib(r.bib)===baseBib(e.bib)))
         .map(e=>baseBib(e.bib))
     )];
     if(unknownBibs.length){
       const rows=unknownBibs.map(b=>{
-        const matches=finishEntries.filter(e=>baseBib(e.bib)===b);
+        const matches=allFinishEntries.filter(e=>baseBib(e.bib)===b);
         const times=matches.map(e=>e.time).join(', ');
         const pos=matches.map(e=>'#'+e.pos).join(', ');
+        const src=isHub&&matches.some(e=>e.device&&e.device!==timingPoint)
+          ?` · via ${[...new Set(matches.map(e=>e.device||timingPoint))].join(', ')}`:'';
         return `<div class="di"><div style="display:flex;align-items:center;gap:6px;">
-          <div style="flex:1;"><strong>BIB ${esc(b)}</strong> · Pos ${pos} · ${times}<br><span style="font-size:.7rem;color:var(--mut)">Not found in runner list</span></div>
+          <div style="flex:1;"><strong>BIB ${esc(b)}</strong> · Pos ${pos} · ${times}<br><span style="font-size:.7rem;color:var(--mut)">Not found in runner list${src}</span></div>
           <button class="btn acc" style="padding:4px 10px;font-size:.6rem;flex-shrink:0;" onclick="addUnknownRunner('${esc(b)}')">＋ Add Runner</button>
         </div></div>`;
       }).join('');
@@ -2007,24 +2016,22 @@ function renderResults(){
   // ── 🔁 Duplicate bibs — same bib recorded more than once as finish ─────────
   let duplicateHtml='';
   {
-    const finEntries=ownEntries.filter(e=>e.type==='finish');
-    // Group by exact bib
     const bibMap={};
-    finEntries.forEach(e=>{
-      const k=e.bib;
-      if(!bibMap[k]) bibMap[k]=[];
-      bibMap[k].push(e);
+    allFinishEntries.forEach(e=>{
+      if(!bibMap[e.bib]) bibMap[e.bib]=[];
+      bibMap[e.bib].push(e);
     });
     const dupes=Object.entries(bibMap).filter(([,arr])=>arr.length>1);
     if(dupes.length){
       const rows=dupes.map(([bib,arr])=>{
         const r=runners.find(x=>baseBib(x.bib)===baseBib(bib));
         const name=r?.name?` — ${esc(r.name)}`:'';
-        const times=arr.map(e=>`#${e.pos} @ ${e.time}`).join(', ');
+        const times=arr.map(e=>`#${e.pos} @ ${e.time}${isHub&&e.device?' ('+esc(e.device)+')':''}`).join(', ');
+        const editBtn=arr[arr.length-1].uid?`<button class="edbtn" onclick="openEdit('${arr[arr.length-1].uid}')" title="Edit latest">✏</button>`:'';
         return `<div class="di"><div style="display:flex;align-items:flex-start;gap:6px;">
           <div style="flex:1;"><strong>BIB ${esc(bib)}</strong>${name}<br>
           <span style="font-size:.7rem;color:var(--mut)">Recorded ${arr.length}×: ${times}</span></div>
-          <button class="edbtn" onclick="openEdit('${arr[arr.length-1].uid}')" title="Edit latest">✏</button>
+          ${editBtn}
         </div></div>`;
       }).join('');
       duplicateHtml=`<div class="dsec" style="border-color:#b020a0;margin-top:8px;">
@@ -2037,17 +2044,19 @@ function renderResults(){
   // ── 🚫 DNF/DNS runners who were timed ─────────────────────────────────────
   let dnfTimedHtml='';
   if(runners.length>0){
-    const finBibs=new Set(ownEntries.filter(e=>e.type==='finish').map(e=>e.bib));
+    const finBibs=new Set(allFinishEntries.map(e=>e.bib));
     const dnfTimed=runners.filter(r=>(r.status==='DNF'||r.status==='DNS')&&finBibs.has(r.bib));
     if(dnfTimed.length){
       const rows=dnfTimed.map(r=>{
-        const fin=ownEntries.find(e=>e.type==='finish'&&e.bib===r.bib);
+        const fin=allFinishEntries.find(e=>e.bib===r.bib);
+        const src=isHub&&fin?.device?` via ${esc(fin.device)}`:'';
+        const editBtn=fin?.uid?`<button class="edbtn" onclick="openEdit('${fin.uid}')" title="Edit entry">📋</button>`:'';
         return `<div class="di"><div style="display:flex;align-items:flex-start;gap:6px;">
           <div style="flex:1;"><strong>BIB ${esc(r.bib)}</strong>${r.name?` — ${esc(r.name)}`:''}<br>
-          <span style="font-size:.7rem;color:var(--mut)">Marked <strong>${r.status}</strong> but has finish entry: #${fin?.pos} @ ${fin?.time}</span></div>
+          <span style="font-size:.7rem;color:var(--mut)">Marked <strong>${r.status}</strong> but has finish entry: #${fin?.pos} @ ${fin?.time}${src}</span></div>
           <div style="display:flex;gap:4px;flex-shrink:0;">
             <button class="edbtn" onclick="(function(){const i=runners.findIndex(x=>x.bib==='${esc(r.bib)}');if(i>=0)openRunnerMod(i);})()" title="Edit runner">✏</button>
-            ${fin?`<button class="edbtn" onclick="openEdit('${fin.uid}')" title="Edit entry">📋</button>`:''}
+            ${editBtn}
           </div>
         </div></div>`;
       }).join('');
@@ -2061,7 +2070,6 @@ function renderResults(){
   // ── 👥 Split / incomplete teams ────────────────────────────────────────────
   let splitTeamHtml='';
   if(runners.length>0){
-    // Find all base bibs that have >1 runner registered (team bibs like 42A/42B)
     const baseGroups={};
     runners.forEach(r=>{
       const base=baseBib(r.bib);
@@ -2072,7 +2080,7 @@ function renderResults(){
     const splitGroups=[];
     teamBases.forEach(([base,grp])=>{
       const memberStatus=grp.map(r=>{
-        const fin=ownEntries.find(e=>e.type==='finish'&&e.bib===r.bib);
+        const fin=allFinishEntries.find(e=>e.bib===r.bib);
         const isDNFDNS=r.status==='DNF'||r.status==='DNS';
         return {r, fin, isDNFDNS, accounted: !!fin||isDNFDNS};
       });
@@ -2087,7 +2095,8 @@ function renderResults(){
       const rows=splitGroups.map(({base,members})=>{
         const teamName=members[0].r.teamName;
         const info=members.map(({r,fin,isDNFDNS})=>{
-          let s=isDNFDNS?` [${r.status}]`:fin?` ✅ #${fin.pos} @ ${fin.time}`:' ⏳ pending';
+          const src=isHub&&fin?.device&&fin.device!==timingPoint?` (${esc(fin.device)})`:'';
+          let s=isDNFDNS?` [${r.status}]`:fin?` ✅ #${fin.pos} @ ${fin.time}${src}`:' ⏳ pending';
           return `<span>${esc(r.bib)}${r.name?` ${esc(r.name)}`:''}<em style="color:var(--mut)">${s}</em></span>`;
         }).join(' &nbsp;·&nbsp; ');
         return `<div class="di"><strong>${teamName?esc(teamName)+' ('+base+')':'BIB group '+esc(base)}</strong> — split team<br>
@@ -2103,28 +2112,30 @@ function renderResults(){
   // ── 🏥 Medical / conditions flags ─────────────────────────────────────────
   let medicalHtml='';
   {
-    const MED_KEYWORDS=/\b(medical|allerg|asthma|epipen|epinephrine|insulin|diabetic|heart|cardiac|seizure|epilep|anaphylax|condition|injury|injured|injured|DNF.*medic|medic.*DNF)\b/i;
-    // Runners with conditions field
+    const MED_KEYWORDS=/\b(medical|allerg|asthma|epipen|epinephrine|insulin|diabetic|heart|cardiac|seizure|epilep|anaphylax|condition|injury|injured|DNF.*medic|medic.*DNF)\b/i;
     const medRunners=runners.filter(r=>r.conditions&&r.conditions.trim());
-    // Entries whose tags mention medical keywords
-    const medEntries=ownEntries.filter(e=>(e.tags||[]).some(t=>MED_KEYWORDS.test(t))||(e.logText&&MED_KEYWORDS.test(e.logText)));
+    // Scan own entries + remote splits for tag/log medical keywords
+    const medEntries=[...ownEntries,...Object.values(window._remoteSplits||{})].filter(
+      e=>(e.tags||[]).some(t=>MED_KEYWORDS.test(t))||(e.logText&&MED_KEYWORDS.test(e.logText))
+    );
     if(medRunners.length||medEntries.length){
       let rows='';
       medRunners.forEach(r=>{
-        const fin=ownEntries.find(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(r.bib));
+        const fin=allFinishEntries.find(e=>baseBib(e.bib)===baseBib(r.bib));
+        const src=isHub&&fin?.device&&fin.device!==timingPoint?` via ${esc(fin.device)}`:'';
         rows+=`<div class="di"><div style="display:flex;align-items:flex-start;gap:6px;">
           <div style="flex:1;"><strong>BIB ${esc(r.bib)}</strong>${r.name?` — ${esc(r.name)}`:''}<br>
           <span style="font-size:.7rem;color:#7a3000;">⚠ ${esc(r.conditions)}</span>
-          ${fin?`<br><span style="font-size:.68rem;color:var(--mut)">Finished: #${fin.pos} @ ${fin.time}</span>`:''}
+          ${fin?`<br><span style="font-size:.68rem;color:var(--mut)">Finished: #${fin.pos} @ ${fin.time}${src}</span>`:''}
           ${r.status==='DNF'||r.status==='DNS'?`<br><span style="font-size:.68rem;color:var(--red);">${r.status}</span>`:''}
           </div>
         </div></div>`;
       });
-      // Tag-flagged entries not already covered by runner conditions
       const medRunnerBibs=new Set(medRunners.map(r=>baseBib(r.bib)));
       const extraMedEntries=medEntries.filter(e=>!medRunnerBibs.has(baseBib(e.bib)));
       extraMedEntries.forEach(e=>{
-        rows+=`<div class="di"><div style="flex:1;"><strong>${e.type==='log'?'Log':'BIB '+esc(e.bib)}</strong>${e.type==='finish'?` · #${e.pos} @ ${e.time}`:''}<br>
+        const src=isHub&&e.device&&e.device!==timingPoint?` · ${esc(e.device)}`:'';
+        rows+=`<div class="di"><div style="flex:1;"><strong>${e.type==='log'?'Log':'BIB '+esc(e.bib)}</strong>${e.type==='finish'?` · #${e.pos} @ ${e.time}${src}`:''}<br>
           <span style="font-size:.7rem;color:#7a3000;">⚠ ${esc((e.tags||[]).join(', ')||e.logText||'')}</span></div></div>`;
       });
       medicalHtml=`<div class="dsec" style="border-color:#c05000;margin-top:8px;">
@@ -2775,28 +2786,42 @@ function openSetupQRScan(){
   openQRModal();
 }
 
-function applyDNSFromSatellite(){
+let _dnfDnsMode='DNS';
+function setDNFDNSMode(mode){
+  _dnfDnsMode=mode;
+  const dnsBtn=document.getElementById('dnf-dns-toggle-dns');
+  const dnfBtn=document.getElementById('dnf-dns-toggle-dnf');
+  if(!dnsBtn||!dnfBtn) return;
+  [dnsBtn,dnfBtn].forEach(b=>{ b.style.background=''; b.style.color=''; b.style.borderColor=''; });
+  const active=mode==='DNS'?dnsBtn:dnfBtn;
+  active.style.background='#6a5000'; active.style.color='#fff'; active.style.borderColor='#6a5000';
+}
+// Legacy alias kept so any old onclick references still work
+function applyDNSFromSatellite(){ _dnfDnsMode='DNS'; applyDNFDNSFromSatellite(); }
+function applyDNFDNSFromSatellite(){
+  const mode=_dnfDnsMode||'DNS';
   const raw=document.getElementById('dns-satellite-input')?.value||'';
   const resultEl=document.getElementById('dns-satellite-result');
-  // Parse comma/space separated bib numbers
-  const bibs=raw.split(/[\s,;]+/).map(s=>s.trim().toUpperCase()).filter(Boolean);
+  // Parse comma/space separated bib numbers; strip any leading DNS/DNF prefix the user pasted in
+  const bibs=raw.split(/[\s,;]+/).map(s=>s.trim().toUpperCase().replace(/^(DNS|DNF)[\/\-]?/,'')).filter(Boolean);
   if(!bibs.length){ if(resultEl) resultEl.textContent='Enter at least one bib number.'; return; }
   let applied=0, skipped=0, notFound=0;
   bibs.forEach(bib=>{
     const r=runners.find(x=>baseBib(x.bib)===baseBib(bib)||x.bib.toUpperCase()===bib);
     if(!r){ notFound++; return; }
-    if(r.status==='DNS'){ skipped++; return; }
-    r.status='DNS'; r.checkedIn=false;
-    appendChangeLog(r,`DNS — satellite message`);
+    if(r.status===mode){ skipped++; return; }
+    r.status=mode;
+    if(mode==='DNS') r.checkedIn=false;
+    appendChangeLog(r,`${mode} — radio/satellite update`);
     applied++;
   });
-  saveR(true); renderRunners(); renderReg(); updBadge();
+  saveR(true); renderRunners(); renderReg(); renderResults(); updBadge();
   const parts=[];
-  if(applied) parts.push(`✅ ${applied} marked DNS`);
-  if(skipped) parts.push(`${skipped} already DNS`);
+  if(applied) parts.push(`✅ ${applied} marked ${mode}`);
+  if(skipped) parts.push(`${skipped} already ${mode}`);
   if(notFound) parts.push(`${notFound} bib${notFound!==1?'s':''} not found`);
   if(resultEl) resultEl.textContent=parts.join(' · ');
-  if(applied){ document.getElementById('dns-satellite-input').value=''; toast(`🚫 ${applied} DNS applied`,'y'); }
+  if(applied){ document.getElementById('dns-satellite-input').value=''; toast(`🚫 ${applied} ${mode} applied`,'y'); }
 }
 
 function openPointSettings(){
