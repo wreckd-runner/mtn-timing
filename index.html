@@ -1559,6 +1559,14 @@ function checkMarshalAllIn(){
     document.getElementById('allin-dnf-count').textContent=dnfCount;
     document.getElementById('allin-dns-count').textContent=dnsCount;
     document.getElementById('allin-point').textContent=timingPoint;
+    const pt2=document.getElementById('allin-point2');
+    if(pt2) pt2.textContent=timingPoint;
+    const radioMsg=document.getElementById('allin-radio-msg');
+    if(radioMsg){
+      const dnfPart=dnfCount?`, ${dnfCount} DNF`:'';
+      const dnsPart=dnsCount?`, ${dnsCount} DNS`:'';
+      radioMsg.textContent=`"All runners accounted for at ${timingPoint}. ${totalFinish} finished${dnfPart}${dnsPart}. All clear."`;
+    }
     document.getElementById('ovl-all-in').style.display='flex';
   }
 }
@@ -1993,40 +2001,140 @@ function renderResults(){
     }
   }
 
+  // ── ⚠ Discrepancy flags (manually raised on entries) ──────────────────────
   const flagHtml=fl.length?`<div class="dsec"><div class="dhd">⚠ Discrepancies (${fl.length})</div>${fl.map(e=>`<div class="di"><div style="display:flex;align-items:flex-start;gap:6px;"><div style="flex:1;"><strong>${e.type==='log'?'Log':'BIB '+e.bib}</strong>${e.type==='finish'?` · Pos ${e.pos}`:''} · ${e.time}<br>${esc(e.flagReason||(e.tags||[]).join(' · '))}</div><div style="display:flex;gap:4px;flex-shrink:0;"><button class="edbtn" onclick="openEdit('${e.uid}')" title="Edit">✏</button><button class="edbtn" style="color:var(--red)" onclick="clearFlag('${e.uid}')" title="Clear flag">✕</button></div></div></div>`).join('')}</div>`:'';
 
-  // Incomplete teams: one member finished, partner is DNF/DNS
-  let incompleteHtml='';
-  if(runners.length>0){
-    const finishBases=new Set(entries.filter(e=>e.type==='finish').map(e=>baseBib(e.bib)));
-    const incompleteGroups=new Set();
-    runners.forEach(r=>{
-      const base=baseBib(r.bib);
-      if((r.status==='DNF'||r.status==='DNS')&&finishBases.has(base)){
-        // Check if a *different* bib with same base has finished
-        const partners=runners.filter(x=>baseBib(x.bib)===base&&x.bib!==r.bib);
-        const partnerFinished=entries.some(e=>e.type==='finish'&&baseBib(e.bib)===base&&e.bib!==r.bib);
-        if(partnerFinished) incompleteGroups.add(base);
-      }
+  // ── 🔁 Duplicate bibs — same bib recorded more than once as finish ─────────
+  let duplicateHtml='';
+  {
+    const finEntries=ownEntries.filter(e=>e.type==='finish');
+    // Group by exact bib
+    const bibMap={};
+    finEntries.forEach(e=>{
+      const k=e.bib;
+      if(!bibMap[k]) bibMap[k]=[];
+      bibMap[k].push(e);
     });
-    if(incompleteGroups.size){
-      const rows=[...incompleteGroups].map(base=>{
-        const grp=runners.filter(x=>baseBib(x.bib)===base);
-        const info=grp.map(r=>{
-          const fin=entries.find(e=>e.type==='finish'&&e.bib===r.bib);
-          const statusStr=r.status?` [${r.status}]`:'';
-          return `${esc(r.bib)}${statusStr}${fin?` ✅ pos #${fin.pos}`:''}`;
-        }).join(' · ');
-        return `<div class="di"><strong>BIB group ${esc(base)}</strong> — tracking issue<br><span style="font-size:.7rem;color:var(--mut)">${info}</span></div>`;
+    const dupes=Object.entries(bibMap).filter(([,arr])=>arr.length>1);
+    if(dupes.length){
+      const rows=dupes.map(([bib,arr])=>{
+        const r=runners.find(x=>baseBib(x.bib)===baseBib(bib));
+        const name=r?.name?` — ${esc(r.name)}`:'';
+        const times=arr.map(e=>`#${e.pos} @ ${e.time}`).join(', ');
+        return `<div class="di"><div style="display:flex;align-items:flex-start;gap:6px;">
+          <div style="flex:1;"><strong>BIB ${esc(bib)}</strong>${name}<br>
+          <span style="font-size:.7rem;color:var(--mut)">Recorded ${arr.length}×: ${times}</span></div>
+          <button class="edbtn" onclick="openEdit('${arr[arr.length-1].uid}')" title="Edit latest">✏</button>
+        </div></div>`;
       }).join('');
-      incompleteHtml=`<div class="dsec" style="border-color:var(--red);margin-top:8px;">
-        <div class="dhd" style="background:rgba(176,32,32,.08);border-color:var(--red);color:var(--red);">⚠ Tracking Issue (${incompleteGroups.size})</div>
+      duplicateHtml=`<div class="dsec" style="border-color:#b020a0;margin-top:8px;">
+        <div class="dhd" style="background:rgba(176,32,160,.08);border-color:#b020a0;color:#8a1080;">🔁 Duplicate Entries (${dupes.length})</div>
         ${rows}
       </div>`;
     }
   }
 
-  // Remote marshal flags — runners whose DNF/DNS was set by a marshal device
+  // ── 🚫 DNF/DNS runners who were timed ─────────────────────────────────────
+  let dnfTimedHtml='';
+  if(runners.length>0){
+    const finBibs=new Set(ownEntries.filter(e=>e.type==='finish').map(e=>e.bib));
+    const dnfTimed=runners.filter(r=>(r.status==='DNF'||r.status==='DNS')&&finBibs.has(r.bib));
+    if(dnfTimed.length){
+      const rows=dnfTimed.map(r=>{
+        const fin=ownEntries.find(e=>e.type==='finish'&&e.bib===r.bib);
+        return `<div class="di"><div style="display:flex;align-items:flex-start;gap:6px;">
+          <div style="flex:1;"><strong>BIB ${esc(r.bib)}</strong>${r.name?` — ${esc(r.name)}`:''}<br>
+          <span style="font-size:.7rem;color:var(--mut)">Marked <strong>${r.status}</strong> but has finish entry: #${fin?.pos} @ ${fin?.time}</span></div>
+          <div style="display:flex;gap:4px;flex-shrink:0;">
+            <button class="edbtn" onclick="(function(){const i=runners.findIndex(x=>x.bib==='${esc(r.bib)}');if(i>=0)openRunnerMod(i);})()" title="Edit runner">✏</button>
+            ${fin?`<button class="edbtn" onclick="openEdit('${fin.uid}')" title="Edit entry">📋</button>`:''}
+          </div>
+        </div></div>`;
+      }).join('');
+      dnfTimedHtml=`<div class="dsec" style="border-color:var(--red);margin-top:8px;">
+        <div class="dhd" style="background:rgba(176,32,32,.08);border-color:var(--red);color:var(--red);">🚫 DNF/DNS but Timed (${dnfTimed.length})</div>
+        ${rows}
+      </div>`;
+    }
+  }
+
+  // ── 👥 Split / incomplete teams ────────────────────────────────────────────
+  let splitTeamHtml='';
+  if(runners.length>0){
+    // Find all base bibs that have >1 runner registered (team bibs like 42A/42B)
+    const baseGroups={};
+    runners.forEach(r=>{
+      const base=baseBib(r.bib);
+      if(!baseGroups[base]) baseGroups[base]=[];
+      baseGroups[base].push(r);
+    });
+    const teamBases=Object.entries(baseGroups).filter(([,arr])=>arr.length>1);
+    const splitGroups=[];
+    teamBases.forEach(([base,grp])=>{
+      const memberStatus=grp.map(r=>{
+        const fin=ownEntries.find(e=>e.type==='finish'&&e.bib===r.bib);
+        const isDNFDNS=r.status==='DNF'||r.status==='DNS';
+        return {r, fin, isDNFDNS, accounted: !!fin||isDNFDNS};
+      });
+      const anyFinished=memberStatus.some(m=>m.fin);
+      const anyUnaccounted=memberStatus.some(m=>!m.accounted);
+      const anyDNFDNS=memberStatus.some(m=>m.isDNFDNS);
+      if(anyFinished&&(anyUnaccounted||anyDNFDNS)){
+        splitGroups.push({base, members:memberStatus});
+      }
+    });
+    if(splitGroups.length){
+      const rows=splitGroups.map(({base,members})=>{
+        const teamName=members[0].r.teamName;
+        const info=members.map(({r,fin,isDNFDNS})=>{
+          let s=isDNFDNS?` [${r.status}]`:fin?` ✅ #${fin.pos} @ ${fin.time}`:' ⏳ pending';
+          return `<span>${esc(r.bib)}${r.name?` ${esc(r.name)}`:''}<em style="color:var(--mut)">${s}</em></span>`;
+        }).join(' &nbsp;·&nbsp; ');
+        return `<div class="di"><strong>${teamName?esc(teamName)+' ('+base+')':'BIB group '+esc(base)}</strong> — split team<br>
+          <span style="font-size:.7rem;color:var(--mut);display:block;margin-top:2px;">${info}</span></div>`;
+      }).join('');
+      splitTeamHtml=`<div class="dsec" style="border-color:var(--ora);margin-top:8px;">
+        <div class="dhd" style="background:rgba(192,92,0,.08);border-color:var(--ora);color:var(--ora);">👥 Split Teams (${splitGroups.length})</div>
+        ${rows}
+      </div>`;
+    }
+  }
+
+  // ── 🏥 Medical / conditions flags ─────────────────────────────────────────
+  let medicalHtml='';
+  {
+    const MED_KEYWORDS=/\b(medical|allerg|asthma|epipen|epinephrine|insulin|diabetic|heart|cardiac|seizure|epilep|anaphylax|condition|injury|injured|injured|DNF.*medic|medic.*DNF)\b/i;
+    // Runners with conditions field
+    const medRunners=runners.filter(r=>r.conditions&&r.conditions.trim());
+    // Entries whose tags mention medical keywords
+    const medEntries=ownEntries.filter(e=>(e.tags||[]).some(t=>MED_KEYWORDS.test(t))||(e.logText&&MED_KEYWORDS.test(e.logText)));
+    if(medRunners.length||medEntries.length){
+      let rows='';
+      medRunners.forEach(r=>{
+        const fin=ownEntries.find(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(r.bib));
+        rows+=`<div class="di"><div style="display:flex;align-items:flex-start;gap:6px;">
+          <div style="flex:1;"><strong>BIB ${esc(r.bib)}</strong>${r.name?` — ${esc(r.name)}`:''}<br>
+          <span style="font-size:.7rem;color:#7a3000;">⚠ ${esc(r.conditions)}</span>
+          ${fin?`<br><span style="font-size:.68rem;color:var(--mut)">Finished: #${fin.pos} @ ${fin.time}</span>`:''}
+          ${r.status==='DNF'||r.status==='DNS'?`<br><span style="font-size:.68rem;color:var(--red);">${r.status}</span>`:''}
+          </div>
+        </div></div>`;
+      });
+      // Tag-flagged entries not already covered by runner conditions
+      const medRunnerBibs=new Set(medRunners.map(r=>baseBib(r.bib)));
+      const extraMedEntries=medEntries.filter(e=>!medRunnerBibs.has(baseBib(e.bib)));
+      extraMedEntries.forEach(e=>{
+        rows+=`<div class="di"><div style="flex:1;"><strong>${e.type==='log'?'Log':'BIB '+esc(e.bib)}</strong>${e.type==='finish'?` · #${e.pos} @ ${e.time}`:''}<br>
+          <span style="font-size:.7rem;color:#7a3000;">⚠ ${esc((e.tags||[]).join(', ')||e.logText||'')}</span></div></div>`;
+      });
+      medicalHtml=`<div class="dsec" style="border-color:#c05000;margin-top:8px;">
+        <div class="dhd" style="background:rgba(192,80,0,.08);border-color:#c05000;color:#8a3800;">🏥 Medical / Conditions (${medRunners.length+extraMedEntries.length})</div>
+        ${rows}
+      </div>`;
+    }
+  }
+
+  // ── 📡 Remote marshal flags ────────────────────────────────────────────────
   let marshalFlagHtml='';
   if(isHub){
     const mf=runners.filter(r=>r._remoteFlag&&r.status);
@@ -2041,7 +2149,7 @@ function renderResults(){
         ${rows}</div>`;
     }
   }
-  dsec.innerHTML=flagHtml+incompleteHtml+unknownHtml+marshalFlagHtml;
+  dsec.innerHTML=flagHtml+duplicateHtml+dnfTimedHtml+splitTeamHtml+unknownHtml+medicalHtml+marshalFlagHtml;
 }
 
 function clearRemoteFlag(bib){
@@ -4469,7 +4577,15 @@ if(!timingPoint){
         <div style="font-size:.6rem;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;">DNS</div>
       </div>
     </div>
-    <div style="font-size:.75rem;color:var(--mut2);text-align:center;margin-bottom:14px;line-height:1.5;">Every registered runner is now accounted for. Please verify your results, then export your data for the hub.</div>
+    <div style="font-size:.75rem;color:var(--mut2);text-align:center;margin-bottom:12px;line-height:1.5;">Every registered runner is now accounted for at <strong id="allin-point2"></strong>.</div>
+    <!-- Radio/message prompt -->
+    <div style="background:#fffbe6;border:1px solid #e6c800;border-radius:8px;padding:10px 12px;margin-bottom:14px;display:flex;align-items:flex-start;gap:8px;">
+      <div style="font-size:1.1rem;flex-shrink:0;">📻</div>
+      <div>
+        <div style="font-size:.75rem;font-weight:700;color:#6b5200;margin-bottom:2px;">Contact Race Director</div>
+        <div style="font-size:.7rem;color:#7a6000;line-height:1.4;" id="allin-radio-msg"></div>
+      </div>
+    </div>
     <div style="display:flex;gap:8px;">
       <button onclick="document.getElementById('ovl-all-in').style.display='none';go('results');" class="btn" style="flex:1;padding:12px;font-size:.82rem;">📋 Review Results</button>
       <button onclick="document.getElementById('ovl-all-in').style.display='none';marshalExportData();" class="btn acc" style="flex:1;padding:12px;font-size:.82rem;font-weight:700;">📤 Export Now</button>
