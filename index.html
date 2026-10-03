@@ -14,14 +14,26 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
-// ── Inline Service Worker (no separate file needed) ───────────────────────
+// ── PWA Service Worker ─────────────────────────────────────────────────────
 if('serviceWorker' in navigator){
   const swCode = `
-const CACHE = 'mtn-v2';
-const CDN_HOSTS = ['cdn.jsdelivr.net','unpkg.com','fonts.googleapis.com','fonts.gstatic.com'];
+const CACHE = 'mtn-v3';
+const APP_URL = self.location.origin + '/';
+const CDN = [
+  'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
+  'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
+  'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js',
+  'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap',
+];
 
+// On install — cache everything immediately
 self.addEventListener('install', e => {
-  self.skipWaiting();
+  e.waitUntil(
+    caches.open(CACHE).then(cache =>
+      // Cache CDN resources — ignore failures (they'll be cached on first fetch)
+      Promise.allSettled(CDN.map(url => cache.add(url)))
+    ).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', e => {
@@ -34,58 +46,59 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  // Never intercept Supabase — needs live network
+  // Never intercept Supabase
   if(url.hostname.includes('supabase.co')) return;
-  // Cache-first for CDN scripts (jsQR, Supabase client, fonts etc)
-  if(CDN_HOSTS.some(h => url.hostname.includes(h))){
-    e.respondWith(
-      caches.match(e.request).then(cached => {
-        if(cached) return cached;
-        return fetch(e.request).then(res => {
-          if(res && res.status === 200){
-            const clone = res.clone();
-            caches.open(CACHE).then(c => c.put(e.request, clone));
-          }
+  // Cache-first for everything — network updates cache in background
+  e.respondWith(
+    caches.open(CACHE).then(cache =>
+      cache.match(e.request).then(cached => {
+        const fresh = fetch(e.request).then(res => {
+          if(res && res.status === 200 && e.request.method === 'GET')
+            cache.put(e.request, res.clone());
           return res;
-        }).catch(() => cached);
+        }).catch(() => null);
+        // Return cached immediately if available, else wait for network
+        return cached || fresh;
       })
-    );
-    return;
-  }
-  // Cache-first for the app HTML itself
-  if(url.pathname === '/' || url.pathname.endsWith('.html') || url.pathname.endsWith('/')){
-    e.respondWith(
-      caches.open(CACHE).then(cache =>
-        cache.match(e.request).then(cached => {
-          const networkFetch = fetch(e.request).then(res => {
-            if(res && res.status === 200) cache.put(e.request, res.clone());
-            return res;
-          }).catch(() => null);
-          return cached || networkFetch;
-        })
-      )
-    );
-    return;
-  }
+    )
+  );
 });
 `;
-  const blob = new Blob([swCode], { type: 'application/javascript' });
-  const swURL = URL.createObjectURL(blob);
-  navigator.serviceWorker.register(swURL, { scope: '/' })
+  // Use /sw.js if available (GitHub+Netlify deploy), else blob fallback
+  const tryRegister = (url) => navigator.serviceWorker.register(url)
     .then(reg => {
-      console.log('MTN SW registered via blob');
-      // Pre-cache the app HTML and CDN scripts on first load
-      reg.addEventListener('activate', () => {
-        caches.open('mtn-v2').then(cache => {
-          cache.add(window.location.href);
-        });
-      });
-    })
-    .catch(err => {
-      // Blob SW may fail on some browsers — fall back to trying /sw.js
-      console.warn('Blob SW failed, trying /sw.js:', err.message);
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      console.log('MTN SW registered:', url);
+      // Force immediate activation
+      if(reg.waiting) reg.waiting.postMessage({type:'SKIP_WAITING'});
     });
+
+  // Try /sw.js first (proper scope), fall back to blob
+  tryRegister('/sw.js').catch(() => {
+    const blob = new Blob([swCode], {type:'application/javascript'});
+    tryRegister(URL.createObjectURL(blob)).catch(e => console.warn('SW failed:', e));
+  });
+
+  // Also directly cache the app when loaded online
+  if(navigator.onLine){
+    window.addEventListener('load', () => {
+      setTimeout(async () => {
+        try {
+          const cache = await caches.open('mtn-v3');
+          // Cache the app page itself
+          const appRes = await fetch(window.location.href);
+          if(appRes.ok) await cache.put(window.location.href, appRes);
+          // Cache CDN scripts
+          await Promise.allSettled(CDN.map(async url => {
+            if(!(await cache.match(url))){
+              const r = await fetch(url);
+              if(r.ok) await cache.put(url, r);
+            }
+          }));
+          console.log('MTN: app pre-cached for offline use');
+        } catch(e){ console.warn('Pre-cache failed:', e); }
+      }, 2000);
+    });
+  }
 }
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -407,63 +420,150 @@ tbody tr.rdata:active{background:#f0f0ea;}
 <div class="toast" id="toast"></div>
 
 <!-- SETUP SCREEN -->
-<div id="setup-screen" style="display:none;position:fixed;inset:0;z-index:9000;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 24px;gap:0;">
-  <div style="text-align:center;margin-bottom:28px;">
-    <div class="logo" style="font-size:2rem;letter-spacing:8px;margin-bottom:4px;">MT<span class="logo-n">N</span></div>
-    <div class="subhead" style="font-size:.65rem;">Mountain Time Node</div>
-    <div style="margin-top:10px;font-size:.78rem;color:var(--mut);">Configure this timing point before starting</div>
+<div id="setup-screen" style="display:none;position:fixed;inset:0;z-index:9000;background:var(--bg);overflow-y:auto;">
+
+  <!-- ── MARSHAL VIEW (default) ── -->
+  <div id="setup-marshal-view" style="min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;">
+    <div style="text-align:center;margin-bottom:32px;">
+      <div class="logo" style="font-size:2rem;letter-spacing:8px;margin-bottom:4px;">MT<span class="logo-n">N</span></div>
+      <div class="subhead" style="font-size:.65rem;">Mountain Time Node</div>
+      <div style="margin-top:10px;font-size:.78rem;color:var(--mut);">Scan the QR code from your hub, or enter your station code</div>
+    </div>
+    <div style="width:100%;max-width:380px;display:flex;flex-direction:column;gap:14px;">
+
+      <!-- Station code entry -->
+      <div style="background:#ddf0ee;border:1px solid #006b5e;border-radius:8px;padding:14px;">
+        <label class="flbl" style="color:#006b5e;margin-top:0;">Station Code</label>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+          <input class="fld" type="text" id="marshal-station-code" placeholder="e.g. MKA-001-START"
+            style="font-size:1rem;text-transform:uppercase;letter-spacing:2px;font-family:'DM Mono',monospace;flex:1;text-align:center;"
+            oninput="this.value=this.value.toUpperCase();parseMarshalCode(this.value)">
+          <button onclick="openSetupQRScan()" style="background:#006b5e;border:none;color:#fff;border-radius:7px;padding:10px 12px;font-size:1.1rem;cursor:pointer;flex-shrink:0;" title="Scan QR code">📷</button>
+        </div>
+        <div style="font-size:.65rem;color:#006b5e;margin-top:6px;">Scan the QR from your hub operator, or type the station code</div>
+      </div>
+
+      <!-- Parsed preview -->
+      <div id="marshal-parsed" style="display:none;background:#fff;border:1px solid var(--bdr);border-radius:6px;padding:12px;">
+        <div style="font-size:.7rem;color:var(--mut);margin-bottom:8px;">Station details</div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+          <span style="font-size:.78rem;color:var(--mut);">Race code</span>
+          <span style="font-size:.78rem;font-weight:700;font-family:'DM Mono',monospace;" id="marshal-parsed-race">—</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;">
+          <span style="font-size:.78rem;color:var(--mut);">Station</span>
+          <span style="font-size:.78rem;font-weight:700;" id="marshal-parsed-point">—</span>
+        </div>
+      </div>
+
+      <!-- Offline-only fallback -->
+      <div id="marshal-manual-section" style="display:none;background:#fff;border:1px solid var(--bdr);border-radius:6px;padding:12px;">
+        <div style="font-size:.7rem;color:var(--mut);margin-bottom:8px;">No code? Enter manually for offline-only timing</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div>
+            <label class="flbl" style="font-size:.7rem;">Station Name</label>
+            <input class="fld" type="text" id="setup-point" placeholder="e.g. KM 10" maxlength="40" style="font-size:.9rem;">
+          </div>
+          <div>
+            <label class="flbl" style="font-size:.7rem;">Race / Event Name (optional)</label>
+            <input class="fld" type="text" id="setup-race" placeholder="e.g. Mukamuka Munter 2026" maxlength="60" style="font-size:.9rem;">
+          </div>
+        </div>
+      </div>
+
+      <button class="rbtn" onclick="completeMarshalSetup()" style="font-size:1rem;letter-spacing:1px;padding:14px;">Start Timing →</button>
+      <div id="setup-err" style="color:var(--red);font-size:.72rem;text-align:center;min-height:16px;"></div>
+
+      <!-- Toggle to manual -->
+      <div style="text-align:center;">
+        <button onclick="toggleMarshalManual()" style="background:none;border:none;color:var(--mut);font-size:.72rem;cursor:pointer;text-decoration:underline;" id="marshal-manual-toggle">No station code — enter manually</button>
+      </div>
+
+      <!-- Admin link -->
+      <div style="text-align:center;margin-top:4px;padding-top:14px;border-top:1px solid var(--bdr2);">
+        <button onclick="switchSetupMode('admin')" style="background:none;border:none;color:var(--acc);font-size:.75rem;font-weight:600;cursor:pointer;">⚙ Race Admin / Hub Setup →</button>
+      </div>
+    </div>
   </div>
-  <div style="width:100%;max-width:400px;display:flex;flex-direction:column;gap:14px;">
-    <!-- Race Code — dynamic based on hub toggle -->
-    <div style="background:#ddf0ee;border:1px solid #006b5e;border-radius:5px;padding:10px 12px;" id="setup-code-box">
-      <label class="flbl" style="color:#006b5e;margin-top:0;" id="setup-code-label">Enter Race Code to join</label>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <input class="fld" type="text" id="setup-code-alpha" placeholder="ABC" maxlength="3"
-          style="font-size:1.2rem;text-transform:uppercase;letter-spacing:3px;font-family:'DM Mono',monospace;width:80px;text-align:center;"
-          oninput="this.value=this.value.replace(/[^A-Za-z]/g,'').toUpperCase().slice(0,3);syncRaceCode()">
-        <span style="font-size:1.4rem;color:var(--acc);font-weight:700;">-</span>
-        <input class="fld" type="text" id="setup-code-num" placeholder="123" maxlength="3"
-          style="font-size:1.2rem;letter-spacing:3px;font-family:'DM Mono',monospace;width:80px;text-align:center;"
-          oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,3);syncRaceCode()">
-        <input type="hidden" id="setup-code">
-        <button class="btn acc" id="setup-code-btn" onclick="generateRaceCode()" style="padding:9px 10px;flex-shrink:0;font-size:.65rem;display:none;">Generate</button>
+
+  <!-- ── ADMIN / HUB VIEW ── -->
+  <div id="setup-admin-view" style="display:none;min-height:100%;flex-direction:column;align-items:center;justify-content:flex-start;padding:24px 20px;">
+    <div style="width:100%;max-width:460px;">
+
+      <!-- Header -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+        <button onclick="switchSetupMode('marshal')" style="background:none;border:none;color:var(--acc);font-size:.85rem;cursor:pointer;padding:4px;">← Back</button>
+        <div style="flex:1;text-align:center;">
+          <div class="logo" style="font-size:1.4rem;letter-spacing:6px;">MT<span class="logo-n">N</span></div>
+        </div>
+        <div style="width:48px;"></div>
       </div>
-      <div style="font-size:.65rem;color:#006b5e;margin-top:4px;" id="setup-code-hint">Get the Race Code from the Hub operator · Leave blank to work offline only</div>
-    </div>
-    <div>
-      <label class="flbl">Race / Event Name</label>
-      <input class="fld" type="text" id="setup-race" placeholder="e.g. Mountain Ultra 2026" maxlength="60" style="font-size:1rem;">
-    </div>
-    <div>
-      <label class="flbl">Timing Point</label>
-      <input class="fld" type="text" id="setup-point" placeholder="e.g. Finish Line" maxlength="40" style="font-size:1rem;">
-      <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;" id="setup-suggestions">
-        <button class="chip" onclick="setSuggestion('Finish Line')">🏁 Finish Line</button>
-        <button class="chip" onclick="setSuggestion('Start')">🚦 Start</button>
-        <button class="chip" onclick="setSuggestion('Marshal Point A')">📍 Marshal A</button>
-        <button class="chip" onclick="setSuggestion('Marshal Point B')">📍 Marshal B</button>
-        <button class="chip" onclick="setSuggestion('Marshal Point C')">📍 Marshal C</button>
-        <button class="chip" onclick="setSuggestion('Roving Control A')">🔄 Roving A</button>
-        <button class="chip" onclick="setSuggestion('Roving Control B')">🔄 Roving B</button>
-        <button class="chip" onclick="setSuggestion('Roving Control C')">🔄 Roving C</button>
-        <button class="chip" onclick="setSuggestion('Tail End Charlie 1')">🔚 TEC 1</button>
-        <button class="chip" onclick="setSuggestion('Tail End Charlie 2')">🔚 TEC 2</button>
-        <button class="chip" onclick="setSuggestion('KM 10')">⏱ KM 10</button>
-        <button class="chip" onclick="setSuggestion('KM 21')">⏱ KM 21</button>
-        <button class="chip" onclick="setSuggestion('KM 42')">⏱ KM 42</button>
+
+      <div style="font-size:.9rem;font-weight:700;color:#1a1a1a;margin-bottom:4px;">🖥 Hub / Race Admin</div>
+      <div style="font-size:.72rem;color:var(--mut);margin-bottom:16px;">The hub is the single base station. It controls the start list, start and finish timing, and collects results from all marshal stations at the end of the race.</div>
+
+      <!-- Race details -->
+      <div style="background:#fff;border:1px solid var(--bdr);border-radius:8px;padding:14px;margin-bottom:12px;">
+        <div style="font-size:.75rem;font-weight:700;color:#444;margin-bottom:10px;">Race Details</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div>
+            <label class="flbl">Race / Event Name</label>
+            <input class="fld" type="text" id="admin-race-name" placeholder="e.g. Mukamuka Munter 2026" maxlength="60" style="font-size:.95rem;">
+          </div>
+          <div>
+            <label class="flbl">Race Code</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input class="fld" type="text" id="setup-code-alpha" placeholder="ABC" maxlength="3"
+                style="font-size:1.1rem;text-transform:uppercase;letter-spacing:3px;font-family:'DM Mono',monospace;width:72px;text-align:center;"
+                oninput="this.value=this.value.replace(/[^A-Za-z]/g,'').toUpperCase().slice(0,3);syncRaceCode();updateStationQRs()">
+              <span style="font-size:1.2rem;color:var(--acc);font-weight:700;">-</span>
+              <input class="fld" type="text" id="setup-code-num" placeholder="001" maxlength="3"
+                style="font-size:1.1rem;letter-spacing:3px;font-family:'DM Mono',monospace;width:72px;text-align:center;"
+                oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,3);syncRaceCode();updateStationQRs()">
+              <input type="hidden" id="setup-code">
+              <button class="btn acc" onclick="generateRaceCode()" style="padding:8px 10px;flex-shrink:0;font-size:.65rem;">Generate</button>
+            </div>
+            <div style="font-size:.65rem;color:var(--mut);margin-top:4px;">Share this code with marshals who join manually</div>
+          </div>
+        </div>
       </div>
-    </div>
-    <!-- Hub toggle -->
-    <div style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--bdr);border-radius:5px;padding:10px 12px;">
-      <input type="checkbox" id="setup-hub" style="width:18px;height:18px;cursor:pointer;accent-color:var(--acc);" onchange="onSetupHubToggle(this.checked)">
-      <div>
-        <div style="font-size:.82rem;font-weight:700;color:#1a1a1a;">🖥 Hub / Base Station</div>
-        <div style="font-size:.68rem;color:var(--mut);margin-top:1px;">Enable to receive and merge data from marshal points. Only one device should be Hub.</div>
+
+      <!-- Marshal stations -->
+      <div style="background:#fff;border:1px solid var(--bdr);border-radius:8px;padding:14px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div style="font-size:.75rem;font-weight:700;color:#444;">Marshal Stations</div>
+          <button onclick="addMarshalStation()" class="btn acc" style="padding:5px 10px;font-size:.7rem;">+ Add Station</button>
+        </div>
+        <div style="font-size:.68rem;color:var(--mut);margin-bottom:10px;">Each station gets its own QR code. Marshals scan it to set up their device instantly.</div>
+        <div id="admin-stations-list" style="display:flex;flex-direction:column;gap:8px;">
+          <!-- Populated dynamically -->
+        </div>
       </div>
+
+      <!-- Hub itself is Start/Finish -->
+      <div style="background:#e8f4ff;border:1px solid #2a6aaa;border-radius:8px;padding:12px;margin-bottom:14px;">
+        <div style="font-size:.78rem;font-weight:700;color:#1a4a8a;margin-bottom:4px;">🖥 Hub = Start / Finish Line</div>
+        <div style="font-size:.68rem;color:#2a4a7a;">The hub device controls the start list and records start/finish times directly. Choose your hub timing role:</div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+          <button class="chip" id="hub-role-finish" onclick="setHubRole('Finish Line')" style="border-color:#2a6aaa;color:#1a4a8a;">🏁 Finish Line</button>
+          <button class="chip" id="hub-role-start" onclick="setHubRole('Start')" style="border-color:#2a6aaa;color:#1a4a8a;">🚦 Start</button>
+          <button class="chip" id="hub-role-both" onclick="setHubRole('Start / Finish')" style="border-color:#2a6aaa;color:#1a4a8a;">🔁 Start + Finish</button>
+          <button class="chip" id="hub-role-reg" onclick="setHubRole('Registration')" style="border-color:#2a6aaa;color:#1a4a8a;">📋 Registration</button>
+        </div>
+        <div style="margin-top:8px;">
+          <input class="fld" type="text" id="admin-hub-role-custom" placeholder="or type a custom role…" maxlength="40"
+            style="font-size:.82rem;" oninput="clearHubRoleChips()">
+        </div>
+        <input type="hidden" id="admin-hub-role" value="Finish Line">
+      </div>
+
+      <button class="rbtn" onclick="completeAdminSetup()" style="font-size:1rem;letter-spacing:1px;padding:14px;width:100%;">Launch Hub →</button>
+      <div id="setup-admin-err" style="color:var(--red);font-size:.72rem;text-align:center;min-height:16px;margin-top:6px;"></div>
+
     </div>
-    <button class="rbtn" onclick="completeSetup()" style="margin-top:8px;font-size:1rem;letter-spacing:1px;">Start Timing →</button>
-    <div id="setup-err" style="color:var(--red);font-size:.72rem;text-align:center;min-height:16px;"></div>
   </div>
+
+
 </div>
 
 <div id="app">
@@ -495,7 +595,15 @@ tbody tr.rdata:active{background:#f0f0ea;}
     </div>
     <div class="tab" onclick="go('reg')" id="tab-reg">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
-      Reg
+      <span id="tab-reg-label">Reg</span>
+    </div>
+    <div class="tab" onclick="go('stations')" id="tab-stations" style="display:none;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M6.3 6.3a8 8 0 000 11.4M17.7 6.3a8 8 0 010 11.4M3.5 3.5a12 12 0 000 17M20.5 3.5a12 12 0 010 17"/></svg>
+      Stations
+    </div>
+    <div class="tab" onclick="go('setup')" id="tab-setup" style="display:none;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Setup
     </div>
   </div>
 
@@ -692,6 +800,87 @@ tbody tr.rdata:active{background:#f0f0ea;}
       </div>
     </div>
 
+    <!-- STATIONS PANEL (hub only) -->
+    <div class="panel" id="panel-stations">
+      <div class="run-top" style="padding:12px 14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div style="font-size:.85rem;font-weight:700;">📡 Marshal Stations</div>
+          <button onclick="addMarshalStation()" class="btn acc" style="padding:6px 12px;font-size:.72rem;">+ Add Station</button>
+        </div>
+        <div style="font-size:.68rem;color:var(--mut);">Manage field stations. Each has a unique code and QR. Import results when marshals return to base.</div>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:0 14px 20px;">
+        <div id="stations-panel-list" style="display:flex;flex-direction:column;gap:10px;margin-top:4px;">
+          <div style="font-size:.75rem;color:var(--mut);text-align:center;padding:24px;">No stations defined — add one above</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MARSHAL SETUP PANEL (marshal only) -->
+    <div class="panel" id="panel-setup">
+      <div class="run-top" style="padding:12px 14px 8px;">
+        <div style="font-size:.85rem;font-weight:700;">⚙ Field Setup</div>
+        <div style="font-size:.68rem;color:var(--mut);margin-top:2px;">Manage your station settings and import data from the hub.</div>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:0 14px 20px;display:flex;flex-direction:column;gap:12px;margin-top:8px;">
+
+        <!-- Station info -->
+        <div style="background:var(--surf2);border:1px solid var(--bdr);border-radius:8px;padding:12px;">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:8px;">Your Station</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:.75rem;color:var(--mut);">Name</span>
+            <span style="font-size:.82rem;font-weight:700;" id="setup-panel-point">—</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:.75rem;color:var(--mut);">Race</span>
+            <span style="font-size:.75rem;font-family:'DM Mono',monospace;" id="setup-panel-race">—</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:.75rem;color:var(--mut);">Code</span>
+            <span style="font-size:.75rem;font-family:'DM Mono',monospace;color:var(--acc);" id="setup-panel-code">—</span>
+          </div>
+          <button onclick="openPointSettings()" class="btn" style="width:100%;margin-top:10px;padding:8px;font-size:.75rem;">✏ Change Station Settings</button>
+        </div>
+
+        <!-- Runner list (from hub CSV) -->
+        <div style="background:var(--surf2);border:1px solid var(--bdr);border-radius:8px;padding:12px;">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:6px;">Participant List</div>
+          <div id="setup-panel-runner-status" style="font-size:.75rem;color:var(--mut2);margin-bottom:8px;">No runners loaded.</div>
+          <div id="setup-panel-runner-warn" style="display:none;background:#f5eecf;border:1px solid #c0a040;border-radius:6px;padding:10px;font-size:.73rem;color:#6a4000;margin-bottom:8px;line-height:1.4;">
+            ⚠ <strong>No runners loaded.</strong> If you have a race registration CSV, upload it now while you still have reception — you won't be able to get it once offline.<br><br>
+            If you can't get the CSV, you can still time by BIB number. Runner names and details won't be shown but all times will be recorded.
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <div class="upa" onclick="document.getElementById('setup-csvf').click()" style="padding:10px 12px;margin:0;">
+              <input type="file" id="setup-csvf" accept=".csv,.txt" onchange="loadCSV(event)">
+              <div class="upa-i" style="font-size:1.2rem;">📂</div>
+              <div class="upa-t" style="font-size:.78rem;">Upload Participant CSV</div>
+              <div class="upa-s">From hub · bib, name, distance, wave…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- DNS from satellite -->
+        <div style="background:var(--surf2);border:1px solid var(--bdr);border-radius:8px;padding:12px;">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:6px;">DNS Updates</div>
+          <div style="font-size:.73rem;color:var(--mut2);margin-bottom:10px;line-height:1.4;">If you receive a DNS message over satellite (e.g. "DNS 105, 202"), enter the bib numbers below to mark them as Did Not Start.</div>
+          <div style="display:flex;gap:6px;">
+            <input class="fld" type="text" id="dns-satellite-input" placeholder="e.g. 105, 202, 303" style="flex:1;font-size:.85rem;text-transform:uppercase;font-family:'DM Mono',monospace;">
+            <button class="btn" onclick="applyDNSFromSatellite()" style="padding:8px 12px;font-size:.78rem;background:#6a5000;color:#fff;border-color:#6a5000;flex-shrink:0;">Apply DNS</button>
+          </div>
+          <div id="dns-satellite-result" style="font-size:.72rem;color:var(--mut);margin-top:6px;min-height:14px;"></div>
+        </div>
+
+        <!-- Export results -->
+        <div style="background:var(--surf2);border:1px solid var(--bdr);border-radius:8px;padding:12px;">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:6px;">End of Race</div>
+          <div style="font-size:.73rem;color:var(--mut2);margin-bottom:8px;line-height:1.4;">When you return to base, export your timing data for the hub operator to import.</div>
+          <button class="btn" onclick="marshalExportData()" style="width:100%;padding:10px;font-size:.78rem;background:#1a6a3a;color:#fff;border-color:#1a6a3a;">📤 Export My Results</button>
+        </div>
+
+      </div>
+    </div>
+
   </div><!-- /panels -->
 
   <!-- Timing point footer — tap to change -->
@@ -742,6 +931,26 @@ tbody tr.rdata:active{background:#f0f0ea;}
   </div>
 </div>
 
+<!-- STATION IMPORT MODAL -->
+<div class="ovl center" id="ovl-station-import" onclick="if(event.target===this)closeOvl('ovl-station-import')">
+  <div class="sht" style="border-radius:12px;max-width:400px;">
+    <div class="sht-t">📥 Import Marshal Results <button onclick="closeOvl('ovl-station-import')">×</button></div>
+    <div style="padding-bottom:8px;">
+      <div style="font-size:.72rem;color:var(--mut);margin-bottom:12px;" id="import-modal-desc">Select which station you're importing results for, then choose the file.</div>
+      <div id="import-station-picker" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;max-height:40vh;overflow-y:auto;"></div>
+      <div id="import-manual-station" style="display:none;margin-bottom:10px;">
+        <label class="flbl" style="font-size:.72rem;">Station Name (from the export file)</label>
+        <input class="fld" id="import-manual-name" type="text" placeholder="e.g. KM 10" style="font-size:.85rem;">
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="closeOvl('ovl-station-import')" style="flex:1;padding:10px;">Cancel</button>
+        <button class="btn acc" onclick="triggerImportFile()" style="flex:1;padding:10px;">📂 Choose File</button>
+      </div>
+      <div id="import-err" style="color:var(--red);font-size:.7rem;text-align:center;margin-top:6px;min-height:14px;"></div>
+    </div>
+  </div>
+</div>
+
 <!-- START LIST MODAL -->
 <div class="ovl center" id="ovl-startlist" onclick="if(event.target===this)closeOvl('ovl-startlist')">
   <div class="sht" style="border-radius:12px;max-height:90vh;max-width:520px;">
@@ -783,35 +992,68 @@ tbody tr.rdata:active{background:#f0f0ea;}
       <div style="font-size:.75rem;color:var(--mut2);font-style:italic;">Loading…</div>
     </div>
 
-    <!-- Manual re-sync (for offline recovery) -->
-    <div style="border-top:1px solid var(--bdr);padding-top:12px;display:flex;flex-direction:column;gap:8px;">
-      <div style="font-size:.7rem;color:var(--mut);">Offline recovery — push any queued data to the network.</div>
+    <!-- Hub-only actions -->
+    <div id="sync-hub-section" style="border-top:1px solid var(--bdr);padding-top:12px;display:none;flex-direction:column;gap:8px;">
+      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:2px;">Hub Actions</div>
       <button class="btn acc" onclick="supaManualSync()" style="width:100%;padding:10px;font-size:.78rem;">↑ Push Queued Data</button>
+      <button onclick="openImportGeneral()" style="width:100%;padding:10px;background:#0a2535;border:1px solid #4a9eff;color:#4a9eff;border-radius:6px;font-weight:700;font-size:.78rem;cursor:pointer;">📥 Import Marshal Results</button>
       <div id="net-queue-status" style="font-size:.68rem;color:var(--mut);text-align:center;"></div>
-      <div style="border-top:1px solid var(--bdr2);padding-top:8px;">
-        <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Clear cached split data and re-pull latest from hub. Use if runner cards are showing stale info.</div>
-        <button class="btn" onclick="supaRefreshCache()" style="width:100%;padding:10px;font-size:.78rem;">🔄 Refresh from Network</button>
-      </div>
-      <div id="reg-clear-section" style="border-top:1px solid var(--bdr2);padding-top:8px;display:none;">
-        <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Clear your own timing entries for this race. Does not affect other devices or runners.</div>
-        <button class="btn red" onclick="confirmClearEntries()" style="width:100%;padding:10px;font-size:.78rem;">🗑 Clear My Entries</button>
-      </div>
-      <div id="marshal-fresh-start" style="border-top:1px solid var(--bdr2);padding-top:8px;display:none;">
-        <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Need a completely fresh start? This clears your entries and disconnects from the current race. You'll be taken back to setup. <strong>Does not affect the hub or other devices.</strong></div>
-        <div id="fresh-start-confirm" style="display:none;background:#f5dede;border:1px solid #b02020;border-radius:5px;padding:10px;margin-bottom:6px;">
-          <div style="font-size:.75rem;font-weight:700;color:#901818;margin-bottom:8px;">⚠ Are you sure? This cannot be undone.</div>
-          <div style="display:flex;gap:6px;">
-            <button class="btn" onclick="document.getElementById('fresh-start-confirm').style.display='none';document.getElementById('fresh-start-btn').style.display='block';" style="flex:1;padding:8px;">Cancel</button>
-            <button class="btn red" onclick="marshalFreshStart()" style="flex:1;padding:8px;background:#b02020;color:#fff;">Yes, Fresh Start</button>
-          </div>
+    </div>
+
+    <!-- Refresh from network -->
+    <div style="border-top:1px solid var(--bdr);padding-top:12px;display:flex;flex-direction:column;gap:6px;">
+      <div style="font-size:.7rem;color:var(--mut);margin-bottom:2px;" id="sync-refresh-desc">Re-pull runner and split data from the hub.</div>
+      <div id="sync-offline-warn" style="display:none;background:#f5eecf;border:1px solid #c0a040;border-radius:5px;padding:8px;font-size:.72rem;color:#6a4000;">⚠ No reception — network refresh unavailable. You're running fully offline.</div>
+      <button class="btn" onclick="supaRefreshCache()" id="sync-refresh-btn" style="width:100%;padding:10px;font-size:.78rem;">🔄 Refresh from Network</button>
+    </div>
+
+    <!-- Marshal-only: fresh start -->
+    <div id="marshal-fresh-start" style="border-top:1px solid var(--bdr2);padding-top:8px;display:none;">
+      <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Need a completely fresh start? This clears your entries and disconnects from the current race. <strong>Does not affect the hub or other devices.</strong></div>
+      <div id="fresh-start-confirm" style="display:none;background:#f5dede;border:1px solid #b02020;border-radius:5px;padding:10px;margin-bottom:6px;">
+        <div style="font-size:.75rem;font-weight:700;color:#901818;margin-bottom:8px;">⚠ Are you sure? This cannot be undone.</div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn" onclick="document.getElementById('fresh-start-confirm').style.display='none';document.getElementById('fresh-start-btn').style.display='block';" style="flex:1;padding:8px;">Cancel</button>
+          <button class="btn red" onclick="marshalFreshStart()" style="flex:1;padding:8px;background:#b02020;color:#fff;">Yes, Fresh Start</button>
         </div>
-        <button class="btn red" id="fresh-start-btn" onclick="document.getElementById('fresh-start-confirm').style.display='block';this.style.display='none';" style="width:100%;padding:10px;font-size:.78rem;">↺ Fresh Start (this device only)</button>
       </div>
+      <button class="btn red" id="fresh-start-btn" onclick="document.getElementById('fresh-start-confirm').style.display='block';this.style.display='none';" style="width:100%;padding:10px;font-size:.78rem;">↺ Fresh Start (this device only)</button>
+    </div>
+
+    <!-- Hub: clear entries -->
+    <div id="reg-clear-section" style="border-top:1px solid var(--bdr2);padding-top:8px;display:none;">
+      <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Clear your own timing entries for this race. Does not affect other devices or runners.</div>
+      <button class="btn red" onclick="confirmClearEntries()" style="width:100%;padding:10px;font-size:.78rem;">🗑 Clear My Entries</button>
+    </div>
+
+    <!-- Full system reset (always available) -->
+    <div style="border-top:1px solid var(--bdr2);padding-top:8px;margin-top:4px;">
+      <button onclick="closeOvl('ovl-sync');document.getElementById('ovl-full-reset').style.display='flex';" style="width:100%;padding:10px;font-size:.75rem;background:none;border:1px solid #901818;color:#901818;border-radius:7px;cursor:pointer;font-weight:600;">⚠️ Full System Reset…</button>
     </div>
   </div>
 </div>
 
-<!-- QR SCAN MODAL (camera for bib scanning) -->
+<!-- QR SCAN MODAL -->
+<div class="ovl center" id="ovl-qrscan" style="display:none;z-index:10000;background:rgba(0,0,0,.92);" onclick="if(event.target===this)closeQRScan()">
+  <div style="background:#111;border-radius:12px;padding:16px;width:min(360px,95vw);display:flex;flex-direction:column;gap:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <span style="color:#fff;font-weight:700;font-size:.9rem;">📷 Scan Station QR</span>
+      <button onclick="closeQRScan()" style="background:none;border:none;color:#fff;font-size:1.3rem;cursor:pointer;line-height:1;">×</button>
+    </div>
+    <div style="position:relative;background:#000;border-radius:8px;overflow:hidden;aspect-ratio:1/1;">
+      <video id="qrscan-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;display:block;"></video>
+      <canvas id="qrscan-canvas" style="display:none;"></canvas>
+      <!-- Viewfinder overlay -->
+      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;">
+        <div style="width:60%;aspect-ratio:1/1;border:2px solid rgba(255,255,255,.5);border-radius:8px;box-shadow:0 0 0 9999px rgba(0,0,0,.35);"></div>
+      </div>
+    </div>
+    <div id="qrscan-status" style="font-size:.78rem;color:#aaa;text-align:center;">Point camera at the station QR code</div>
+    <div id="qrscan-result" style="display:none;background:#1a4a1a;border:1px solid #3a7a3a;border-radius:7px;padding:10px;font-size:.78rem;color:#7fff7f;text-align:center;word-break:break-all;"></div>
+    <button onclick="closeQRScan()" style="background:#333;border:1px solid #555;color:#ddd;border-radius:7px;padding:10px;font-size:.85rem;cursor:pointer;">Cancel</button>
+  </div>
+</div>
+
 <!-- LOG MODAL -->
 <div class="ovl" id="ovl-log" onclick="if(event.target===this)closeOvl('ovl-log')">
   <div class="sht">
@@ -1129,8 +1371,8 @@ function load(){
 }
 const saveE=(skipQueue=false)=>{
   localStorage.setItem(SK_E,JSON.stringify(entries));
-  // Queue any unsynced entries to Supabase automatically
-  if(!skipQueue&&raceCode){
+  // Only hub writes entries to Supabase — marshals are fully offline
+  if(!skipQueue&&raceCode&&isHub){
     entries.filter(e=>!e._synced&&(e.device||timingPoint)===timingPoint).forEach(e=>{
       supaQueueEntry(e); e._synced=true;
     });
@@ -1138,9 +1380,8 @@ const saveE=(skipQueue=false)=>{
 };
 const saveR=(skipQueue=false)=>{
   localStorage.setItem(SK_R,JSON.stringify(runners));
-  // Hub automatically pushes runner changes to Supabase
-  // Marshals also push their status changes (checkedIn, DNS, DNF)
-  if(!skipQueue&&raceCode){
+  // Only hub writes runners to Supabase — marshals never write
+  if(!skipQueue&&raceCode&&isHub){
     runners.forEach(r=>supaQueueRunner(r));
   }
 };
@@ -1949,55 +2190,400 @@ function unlinkRunnerTeam(){
 
 
 // ═══════════════ TIMING POINT SETUP ═══════════════
-function onSetupHubToggle(hubOn){
-  const label = document.getElementById('setup-code-label');
-  const btn   = document.getElementById('setup-code-btn');
-  const hint  = document.getElementById('setup-code-hint');
-  const input = document.getElementById('setup-code');
-  const alphaEl=document.getElementById('setup-code-alpha');
-  const numEl=document.getElementById('setup-code-num');
-  if(hubOn){
-    label.textContent = 'Create Race Code (share with marshals)';
-    btn.style.display = 'inline-flex';
-    hint.textContent  = 'Type your own 3-letter + 3-number code, or tap Generate';
-    if(alphaEl&&!alphaEl.value) generateRaceCode();
+
+// Marshal station data managed by admin
+// _adminStations: [{name, slug}]  slug = short unique code e.g. "KM10"
+let _adminStations = [];
+let _hubRole = 'Finish Line';
+// _marshalImports: {[slug]: {stationName, importedAt, entryCount, device}}
+let _marshalImports = {};
+// Currently selected station for import
+let _importTargetSlug = null;
+
+const SK_STATIONS = 'mtn_stations_v2';
+const SK_IMPORTS  = 'mtn_imports_v1';
+
+function loadStations(){
+  try{ _adminStations=JSON.parse(localStorage.getItem(SK_STATIONS))||[]; }catch{ _adminStations=[]; }
+  try{ _marshalImports=JSON.parse(localStorage.getItem(SK_IMPORTS))||{}; }catch{ _marshalImports={}; }
+}
+function saveStations(){
+  localStorage.setItem(SK_STATIONS,JSON.stringify(_adminStations));
+  localStorage.setItem(SK_IMPORTS,JSON.stringify(_marshalImports));
+}
+
+function nameToSlug(name){
+  // Convert "KM 10" → "KM10", "Marshal A" → "MRSHA", "Summit Check" → "SUMMT"
+  return name.replace(/\s+/g,'').replace(/[^A-Za-z0-9]/g,'').toUpperCase().slice(0,6)||'POINT';
+}
+function uniqueSlug(name, existingSlugs){
+  let base=nameToSlug(name), slug=base, n=2;
+  while(existingSlugs.includes(slug)) slug=base+(n++);
+  return slug;
+}
+
+function switchSetupMode(mode){
+  const mView=document.getElementById('setup-marshal-view');
+  const aView=document.getElementById('setup-admin-view');
+  if(mode==='admin'){
+    mView.style.display='none';
+    aView.style.display='flex';
+    // Pre-generate race code if empty
+    const alpha=document.getElementById('setup-code-alpha');
+    if(alpha&&!alpha.value) generateRaceCode();
+    renderAdminStations();
   } else {
-    label.textContent = 'Enter Race Code to join';
-    btn.style.display = 'none';
-    hint.textContent  = 'Get the Race Code from the Hub operator · Leave blank to work offline only';
-    if(alphaEl) alphaEl.value='';
-    if(numEl) numEl.value='';
-    syncRaceCode();
+    aView.style.display='none';
+    mView.style.display='flex';
   }
 }
 
-function setSuggestion(val){
-  document.getElementById('setup-point').value=val;
-  document.getElementById('setup-point').focus();
+// ── Marshal flow ──────────────────────────────────────────────────────────
+let _marshalManualMode=false;
+function toggleMarshalManual(){
+  _marshalManualMode=!_marshalManualMode;
+  document.getElementById('marshal-manual-section').style.display=_marshalManualMode?'block':'none';
+  document.getElementById('marshal-manual-toggle').textContent=_marshalManualMode?'Hide manual entry':'No station code — enter manually';
 }
-function completeSetup(){
-  const race=document.getElementById('setup-race').value.trim();
-  const point=document.getElementById('setup-point').value.trim();
+
+function parseMarshalCode(val){
+  // Station code format: RACE-POINT  e.g. MKA-001-Start or MKA-001-KM10
+  // Race code is always first two segments (ABC-123), point is remainder
+  val=val.trim().toUpperCase();
+  const parts=val.split('-');
+  const parsedEl=document.getElementById('marshal-parsed');
+  const parsedRace=document.getElementById('marshal-parsed-race');
+  const parsedPoint=document.getElementById('marshal-parsed-point');
+  if(parts.length>=3){
+    const rc=parts[0]+'-'+parts[1];
+    const pt=parts.slice(2).join(' ');
+    parsedRace.textContent=rc;
+    parsedPoint.textContent=pt||'—';
+    parsedEl.style.display='block';
+  } else {
+    parsedEl.style.display='none';
+  }
+}
+
+function completeMarshalSetup(){
   const err=document.getElementById('setup-err');
-  if(!point){err.textContent='Please enter a timing point name.';return;}
-  const newCode=(document.getElementById('setup-code').value.trim().toUpperCase()||'');
+  err.textContent='';
+  let point='', newCode='', race='';
+
+  if(_marshalManualMode){
+    point=(document.getElementById('setup-point')?.value||'').trim();
+    race=(document.getElementById('setup-race')?.value||'').trim();
+    if(!point){err.textContent='Enter a station name.';return;}
+  } else {
+    const raw=(document.getElementById('marshal-station-code')?.value||'').trim().toUpperCase();
+    if(!raw){
+      // Allow blank → offline only, show manual
+      _marshalManualMode=true;
+      toggleMarshalManual();
+      err.textContent='Enter a station name to continue offline.';
+      return;
+    }
+    const parts=raw.split('-');
+    if(parts.length<3){err.textContent='Station code must be in format RACE-CODE-STATIONNAME (e.g. MKA-001-KM10)';return;}
+    newCode=parts[0]+'-'+parts[1];
+    point=parts.slice(2).join(' ');
+    race='';
+  }
+
+  _finishSetup({race:race||'Race', point, newCode, hub:false});
+}
+
+// ── Admin / Hub flow ──────────────────────────────────────────────────────
+function setHubRole(role){
+  _hubRole=role;
+  document.getElementById('admin-hub-role').value=role;
+  document.getElementById('admin-hub-role-custom').value='';
+  ['finish','start','both','reg'].forEach(k=>{
+    const el=document.getElementById('hub-role-'+k);
+    if(el) el.style.fontWeight=el.textContent.includes(role.split(' ')[0])?'700':'400';
+  });
+}
+function clearHubRoleChips(){
+  _hubRole=document.getElementById('admin-hub-role-custom').value.trim()||'Finish Line';
+  ['finish','start','both','reg'].forEach(k=>{
+    const el=document.getElementById('hub-role-'+k);
+    if(el) el.style.fontWeight='400';
+  });
+}
+
+function addMarshalStation(fromPanel){
+  const code=document.getElementById('setup-code')?.value.trim().toUpperCase()||raceCode;
+  const errEl=fromPanel?document.getElementById('stations-add-err'):document.getElementById('setup-admin-err');
+  if(!code){ if(errEl) errEl.textContent='Generate a race code first.'; return; }
+  const names=['KM 10','KM 21','Marshal A','Marshal B','Marshal C','Summit Check','Valley Check','TEC 1'];
+  const used=_adminStations.map(s=>s.name);
+  const next=names.find(n=>!used.includes(n))||`Point ${_adminStations.length+1}`;
+  const slugs=_adminStations.map(s=>s.slug);
+  _adminStations.push({name:next, slug:uniqueSlug(next,slugs)});
+  saveStations();
+  renderAdminStations();
+  renderStationsPanel();
+}
+
+function removeStation(i){
+  _adminStations.splice(i,1);
+  saveStations();
+  renderAdminStations();
+  renderStationsPanel();
+}
+
+function updateStationName(i, val){
+  _adminStations[i].name = val;
+  // Update slug only if it's still the auto-generated one
+  const slugs = _adminStations.map((s,j)=>j===i?null:s.slug).filter(Boolean);
+  _adminStations[i].slug = uniqueSlug(val, slugs);
+  saveStations();
+  renderAdminStations();
+}
+
+function renderAdminStations(){
+  const list=document.getElementById('admin-stations-list');
+  if(!list) return;
+  if(!_adminStations.length){
+    list.innerHTML='<div style="font-size:.7rem;color:var(--mut);text-align:center;padding:8px;">No marshal stations yet — add one above</div>';
+    return;
+  }
+  const rc=document.getElementById('setup-code')?.value.trim().toUpperCase()||raceCode||'???-???';
+  list.innerHTML=_adminStations.map((s,i)=>`
+    <div style="display:flex;align-items:center;gap:8px;background:#f7f7f5;border:1px solid var(--bdr2);border-radius:5px;padding:8px 10px;">
+      <span style="font-size:.75rem;">📍</span>
+      <div style="flex:1;min-width:0;">
+        <input class="fld" value="${esc(s.name)}" maxlength="40"
+          style="font-size:.82rem;padding:4px 6px;border:1px solid var(--bdr2);border-radius:3px;width:100%;"
+          onchange="updateStationName(${i},this.value)">
+        <div style="font-size:.6rem;color:var(--mut);margin-top:2px;font-family:'DM Mono',monospace;">${rc}-${s.slug}</div>
+      </div>
+      <button onclick="showStationQR(${i},'setup')" class="btn" style="padding:5px 8px;font-size:.65rem;background:#1a4a8a;color:#fff;border:none;white-space:nowrap;">QR</button>
+      <button onclick="removeStation(${i})" style="background:none;border:none;color:var(--red);font-size:.9rem;cursor:pointer;padding:2px 4px;">✕</button>
+    </div>`).join('');
+}
+
+function stationFullCode(rc, station){
+  return `${rc}-${station.slug}`;
+}
+
+function showStationQR(i, context){
+  const rc=(context==='setup'?document.getElementById('setup-code')?.value.trim().toUpperCase():null)||raceCode;
+  if(!rc){ toast('Set the race code first','r'); return; }
+  const station=_adminStations[i];
+  if(!station) return;
+  const code=stationFullCode(rc,station);
+  document.getElementById('qr-sheet-title').textContent=station.name;
+  document.getElementById('qr-sheet-code').textContent=code;
+  const canvas=document.getElementById('qr-sheet-canvas');
+  canvas.innerHTML='';
+  if(typeof QRCode!=='undefined'){
+    new QRCode(canvas,{text:code,width:200,height:200,colorDark:'#1a1a1a',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M});
+  } else {
+    canvas.innerHTML=`<div style="font-size:.7rem;color:var(--mut);">QR library not loaded — share code manually:<br><strong>${code}</strong></div>`;
+  }
+  document.getElementById('setup-qr-sheet').style.display='flex';
+}
+
+function printStationQR(){ window.print(); }
+
+// ── Stations panel (in-app, hub only) ─────────────────────────────────────
+function renderStationsPanel(){
+  const list=document.getElementById('stations-panel-list');
+  if(!list) return;
+  if(!_adminStations.length){
+    list.innerHTML='<div style="font-size:.75rem;color:var(--mut);text-align:center;padding:24px;">No stations defined yet.<br><button onclick="addMarshalStation(true)" class="btn acc" style="margin-top:10px;padding:8px 16px;">+ Add First Station</button></div>';
+    return;
+  }
+  list.innerHTML=_adminStations.map((s,i)=>{
+    const imp=_marshalImports[s.slug];
+    const code=stationFullCode(raceCode,s);
+    const impBadge=imp
+      ? `<div style="font-size:.65rem;background:#ddf0ee;color:#006b5e;border-radius:4px;padding:3px 6px;margin-top:4px;">✅ ${imp.entryCount} entries imported · ${imp.importedAt}</div>`
+      : `<div style="font-size:.65rem;color:var(--mut);margin-top:4px;">No results imported yet</div>`;
+    return `
+    <div style="background:#fff;border:1px solid var(--bdr);border-radius:8px;padding:12px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px;">
+        <div>
+          <div style="font-size:.85rem;font-weight:700;">📍 ${esc(s.name)}</div>
+          <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:var(--mut);">${code}</div>
+        </div>
+        <div style="display:flex;gap:5px;flex-shrink:0;">
+          <button onclick="showStationQR(${i},'panel')" class="btn" style="padding:5px 10px;font-size:.68rem;background:#1a4a8a;color:#fff;border:none;">QR</button>
+          <button onclick="openImportForStation(${i})" class="btn acc" style="padding:5px 10px;font-size:.68rem;">📥 Import</button>
+        </div>
+      </div>
+      ${impBadge}
+      ${imp&&imp.entryCount?`<button onclick="showStationResults('${s.slug}')" style="margin-top:8px;background:none;border:none;color:var(--acc);font-size:.7rem;cursor:pointer;padding:0;">View imported entries →</button>`:''}
+    </div>`;
+  }).join('');
+}
+
+function openImportForStation(i){
+  _importTargetSlug = _adminStations[i]?.slug || null;
+  const station = _adminStations[i];
+  document.getElementById('import-modal-desc').textContent =
+    `Importing results for: ${station?.name||'Unknown'} (${stationFullCode(raceCode,station)})`;
+  document.getElementById('import-err').textContent='';
+  showOvl('ovl-station-import');
+}
+
+function openImportGeneral(){
+  // Called from sync modal — show station picker
+  _importTargetSlug = null;
+  const picker=document.getElementById('import-station-picker');
+  const manualDiv=document.getElementById('import-manual-station');
+  document.getElementById('import-modal-desc').textContent='Which station are you importing results for?';
+  document.getElementById('import-err').textContent='';
+  if(_adminStations.length){
+    picker.innerHTML=_adminStations.map((s,i)=>{
+      const imp=_marshalImports[s.slug];
+      return `<button onclick="_importTargetSlug='${s.slug}';highlightImportStation(this)"
+        style="text-align:left;background:#f7f7f5;border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;cursor:pointer;width:100%;">
+        <div style="font-size:.82rem;font-weight:600;">📍 ${esc(s.name)}</div>
+        <div style="font-size:.62rem;font-family:'DM Mono',monospace;color:var(--mut);">${stationFullCode(raceCode,s)}</div>
+        ${imp?`<div style="font-size:.6rem;color:#006b5e;margin-top:2px;">Previously imported: ${imp.entryCount} entries</div>`:''}
+      </button>`;
+    }).join('');
+    manualDiv.style.display='none';
+  } else {
+    picker.innerHTML='<div style="font-size:.72rem;color:var(--mut);">No stations defined — the file will be imported as-is from whatever station the device was configured as.</div>';
+    manualDiv.style.display='block';
+  }
+  showOvl('ovl-station-import');
+}
+
+function highlightImportStation(el){
+  document.querySelectorAll('#import-station-picker button').forEach(b=>b.style.borderColor='var(--bdr)');
+  el.style.borderColor='var(--acc)';
+  el.style.background='#ddf0ee';
+}
+
+function triggerImportFile(){
+  const err=document.getElementById('import-err');
+  if(_adminStations.length && !_importTargetSlug){
+    err.textContent='Select a station first.'; return;
+  }
+  err.textContent='';
+  const inp=document.createElement('input');
+  inp.type='file'; inp.accept='.json';
+  inp.onchange=async e=>{
+    const file=e.target.files[0]; if(!file) return;
+    try{
+      const text=await file.text();
+      const data=JSON.parse(text);
+      if(!data.exportVersion||!data.entries){ err.textContent='❌ Invalid marshal export file'; return; }
+      if(data.raceCode&&data.raceCode!==raceCode){
+        if(!confirm(`Race code in file (${data.raceCode}) doesn't match this race (${raceCode}). Import anyway?`)) return;
+      }
+      // Determine station name to tag entries with
+      const targetStation = _adminStations.find(s=>s.slug===_importTargetSlug);
+      const stationLabel = targetStation?.name || data.device || 'Unknown Station';
+      if(!window._remoteSplits) window._remoteSplits={};
+      let newEntries=0;
+      data.entries.forEach(row=>{
+        if(!window._remoteSplits[row.uid]){
+          window._remoteSplits[row.uid]={
+            uid:row.uid, type:row.type, bib:row.bib, time:row.time,
+            pos:row.pos, device:stationLabel, timestamp:row.timestamp, point:stationLabel
+          };
+          newEntries++;
+        }
+      });
+      // Merge runner notes
+      let updatedRunners=0;
+      if(data.runnerNotes?.length){
+        data.runnerNotes.forEach(note=>{
+          const idx=runners.findIndex(r=>r.bib===note.bib);
+          if(idx>=0){
+            const r={...runners[idx]};
+            if(note.status&&note.status!=='active') r.status=note.status;
+            if(note.runnerTags?.length) r.runnerTags=[...new Set([...(r.runnerTags||[]),...note.runnerTags])];
+            if(note.notes&&!r.notes) r.notes=note.notes;
+            runners[idx]=r; updatedRunners++;
+          }
+        });
+        saveR();
+      }
+      // Record import metadata
+      if(_importTargetSlug){
+        _marshalImports[_importTargetSlug]={
+          stationName:stationLabel, device:data.device||stationLabel,
+          importedAt:new Date().toLocaleTimeString(),
+          entryCount:(_marshalImports[_importTargetSlug]?.entryCount||0)+newEntries
+        };
+        saveStations();
+      }
+      renderRunners(); renderReg(); renderStationsPanel();
+      closeOvl('ovl-station-import');
+      toast(`✅ ${stationLabel}: ${newEntries} entries + ${updatedRunners} runner updates`,'g');
+    }catch(ex){ err.textContent='❌ '+ex.message; }
+  };
+  inp.click();
+}
+
+function showStationResults(slug){
+  const station=_adminStations.find(s=>s.slug===slug);
+  if(!station||!window._remoteSplits) return;
+  const entries=Object.values(window._remoteSplits).filter(e=>e.device===station.name||e.point===station.name);
+  if(!entries.length){ toast('No entries for this station','y'); return; }
+  const lines=entries.sort((a,b)=>a.timestamp-b.timestamp)
+    .map(e=>`BIB ${e.bib} · ${e.time} · ${e.type}`).join('\n');
+  alert(`${station.name} — ${entries.length} entries:\n\n${lines}`);
+}
+
+function completeAdminSetup(){
+  const err=document.getElementById('setup-admin-err');
+  err.textContent='';
+  const race=(document.getElementById('admin-race-name')?.value||'').trim();
+  const code=document.getElementById('setup-code').value.trim().toUpperCase();
+  const customRole=(document.getElementById('admin-hub-role-custom')?.value||'').trim();
+  const point=customRole||document.getElementById('admin-hub-role').value||'Finish Line';
+  if(!race){err.textContent='Enter the race name.';return;}
+  if(!code){err.textContent='Generate or enter a race code.';return;}
+  // Save station list to localStorage so hub can reference it
+  localStorage.setItem('mtn_stations_v1',JSON.stringify(_adminStations));
+  _finishSetup({race, point, newCode:code, hub:true});
+}
+
+// ── Shared setup completion ───────────────────────────────────────────────
+function _finishSetup({race,point,newCode,hub}){
   const codeChanged=newCode&&newCode!==raceCode;
-  raceName=race||'Unnamed Race'; timingPoint=point; isHub=document.getElementById('setup-hub').checked;
+  raceName=race||'Race'; timingPoint=point; isHub=hub;
   if(codeChanged){
-    // Different race — clear all local data before starting fresh session
     clearSessionData();
     raceCode=newCode;
-    toast(`🆕 New race session — previous data cleared`,'y');
+    toast('🆕 New race session — previous data cleared','y');
   } else {
     raceCode=newCode;
   }
   localStorage.setItem(SK_P,JSON.stringify({race:raceName,point:timingPoint,isHub,raceCode}));
-  if(raceCode){ initSupabase(); setTimeout(supaPullRaceData,1500); }
+  if(isHub&&raceCode){
+    initSupabase();
+    setTimeout(async()=>{
+      await enforceOneHub();
+      supaPullRaceData();
+    },1200);
+  } else if(!isHub&&raceCode){
+    initSupabase();
+    setTimeout(()=>{
+      supaPullRaceData();
+      setTimeout(checkMarshalOfflineReady,4000);
+    },1200);
+  }
   document.getElementById('setup-screen').style.display='none';
   document.getElementById('app').style.visibility='visible';
   updateHdrPoint();
-  toast(`✅ ${timingPoint} ready`,'g');
+  toast(`✅ ${timingPoint} ${isHub?'(HUB)':'(Marshal)'} ready`,'g');
 }
+
+// Keep for backward compat (called from old hub toggle path)
+function completeSetup(){ completeMarshalSetup(); }
+function setSuggestion(val){
+  const el=document.getElementById('setup-point');
+  if(el){el.value=val;el.focus();}
+}
+function onSetupHubToggle(){}
 function clearSessionData(){
   // Clear all local race data — entries, runners, splits, queue
   entries=[]; runners=[];
@@ -2016,8 +2602,62 @@ function updateHdrPoint(){
   if(hubBadge) hubBadge.style.display=isHub?'inline':'none';
   const supaEl=document.getElementById('supa-status');
   if(supaEl) supaEl.style.display=raceCode?'inline':'none';
+  const stTab=document.getElementById('tab-stations');
+  if(stTab) stTab.style.display=isHub?'flex':'none';
+  const setupTab=document.getElementById('tab-setup');
+  if(setupTab) setupTab.style.display=!isHub?'flex':'none';
+  const regLabel=document.getElementById('tab-reg-label');
+  if(regLabel) regLabel.textContent=isHub?'Reg':'Reg';
+  updateSetupPanel();
   if(raceCode&&!supaReady&&navigator.onLine) initSupabase();
 }
+function updateSetupPanel(){
+  // Refresh the marshal setup panel info
+  const pp=document.getElementById('setup-panel-point');
+  const pr=document.getElementById('setup-panel-race');
+  const pc=document.getElementById('setup-panel-code');
+  if(pp) pp.textContent=timingPoint||'—';
+  if(pr) pr.textContent=raceName||'—';
+  if(pc) pc.textContent=raceCode||'—';
+  const runnerStatus=document.getElementById('setup-panel-runner-status');
+  const runnerWarn=document.getElementById('setup-panel-runner-warn');
+  if(runnerStatus){
+    const n=runners.length;
+    runnerStatus.textContent=n?`${n} participant${n!==1?'s':''} loaded`:'No runners loaded.';
+  }
+  if(runnerWarn) runnerWarn.style.display=runners.length?'none':'block';
+}
+
+function openSetupQRScan(){
+  // Re-use the existing QR scan modal (bib scanner) but route result to station code
+  _qrScanTarget='station';
+  openQRModal();
+}
+
+function applyDNSFromSatellite(){
+  const raw=document.getElementById('dns-satellite-input')?.value||'';
+  const resultEl=document.getElementById('dns-satellite-result');
+  // Parse comma/space separated bib numbers
+  const bibs=raw.split(/[\s,;]+/).map(s=>s.trim().toUpperCase()).filter(Boolean);
+  if(!bibs.length){ if(resultEl) resultEl.textContent='Enter at least one bib number.'; return; }
+  let applied=0, skipped=0, notFound=0;
+  bibs.forEach(bib=>{
+    const r=runners.find(x=>baseBib(x.bib)===baseBib(bib)||x.bib.toUpperCase()===bib);
+    if(!r){ notFound++; return; }
+    if(r.status==='DNS'){ skipped++; return; }
+    r.status='DNS'; r.checkedIn=false;
+    appendChangeLog(r,`DNS — satellite message`);
+    applied++;
+  });
+  saveR(true); renderRunners(); renderReg(); updBadge();
+  const parts=[];
+  if(applied) parts.push(`✅ ${applied} marked DNS`);
+  if(skipped) parts.push(`${skipped} already DNS`);
+  if(notFound) parts.push(`${notFound} bib${notFound!==1?'s':''} not found`);
+  if(resultEl) resultEl.textContent=parts.join(' · ');
+  if(applied){ document.getElementById('dns-satellite-input').value=''; toast(`🚫 ${applied} DNS applied`,'y'); }
+}
+
 function openPointSettings(){
   const pcParts=(raceCode||'').split('-');
   const pcAlpha=document.getElementById('point-code-alpha');
@@ -2541,7 +3181,7 @@ function parseCSV(txt){
     }
   });
   const autoLinked=autoLinkTeams();
-  saveR(); renderRunners(); renderReg(); renderResults(); updBadge();
+  saveR(); renderRunners(); renderReg(); renderResults(); updBadge(); updateSetupPanel();
   const totalPaired=(csvPaired/2|0)+autoLinked;
   const msg=[added&&`${added} added`,updated&&`${updated} updated`,totalPaired&&`${totalPaired} team pair${totalPaired!==1?'s':''} linked`].filter(Boolean).join(', ');
   toast(`📋 ${msg||'No changes'}`,added||updated?'g':'y');
@@ -2894,10 +3534,67 @@ function renderRunners(){
 function go(name){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.getElementById('panel-'+name).classList.add('active');
-  document.getElementById('tab-'+name).classList.add('active');
+  const panel=document.getElementById('panel-'+name);
+  const tab=document.getElementById('tab-'+name);
+  if(panel) panel.classList.add('active');
+  if(tab) tab.classList.add('active');
   if(name==='results') renderResults();
   if(name==='runners') renderRunners();
+  if(name==='stations') renderStationsPanel();
+  if(name==='setup') updateSetupPanel();
+}
+
+// ═══════════════ QR SCAN ═══════════════
+let _qrScanTarget='station'; // 'station' only for now
+let _qrScanInterval=null;
+
+function openQRModal(){
+  document.getElementById('ovl-qrscan').style.display='flex';
+  document.getElementById('qrscan-result').style.display='none';
+  document.getElementById('qrscan-status').textContent='Point camera at the station QR code';
+  const video=document.getElementById('qrscan-video');
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false})
+    .then(stream=>{
+      video._stream=stream;
+      video.srcObject=stream;
+      video.play();
+      const canvas=document.getElementById('qrscan-canvas');
+      _qrScanInterval=setInterval(()=>{
+        if(video.readyState!==video.HAVE_ENOUGH_DATA) return;
+        canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+        const ctx=canvas.getContext('2d');
+        ctx.drawImage(video,0,0,canvas.width,canvas.height);
+        const img=ctx.getImageData(0,0,canvas.width,canvas.height);
+        const code=typeof jsQR!=='undefined'?jsQR(img.data,img.width,img.height):null;
+        if(code?.data){
+          clearInterval(_qrScanInterval); _qrScanInterval=null;
+          handleQRResult(code.data);
+        }
+      },200);
+    })
+    .catch(err=>{
+      document.getElementById('qrscan-status').textContent='Camera unavailable: '+err.message+'\nEnter the code manually instead.';
+    });
+}
+
+function handleQRResult(data){
+  const resultEl=document.getElementById('qrscan-result');
+  resultEl.textContent='✅ Scanned: '+data;
+  resultEl.style.display='block';
+  document.getElementById('qrscan-status').textContent='Code detected!';
+  if(_qrScanTarget==='station'){
+    const inp=document.getElementById('marshal-station-code');
+    if(inp){ inp.value=data.toUpperCase(); parseMarshalCode(inp.value); }
+    setTimeout(closeQRScan,900);
+  }
+}
+
+function closeQRScan(){
+  clearInterval(_qrScanInterval); _qrScanInterval=null;
+  const video=document.getElementById('qrscan-video');
+  if(video._stream) video._stream.getTracks().forEach(t=>t.stop());
+  video.srcObject=null;
+  document.getElementById('ovl-qrscan').style.display='none';
 }
 
 // ═══════════════ EXPORT ═══════════════
@@ -2973,7 +3670,8 @@ async function resetAll(){
   renderResults(); renderRunners(); renderReg(); updBadge();
   closeOvl('ovl-reset');
   bib=''; ui();
-  document.getElementById('setup-screen').style.display='flex';
+  switchSetupMode('marshal');
+  document.getElementById('setup-screen').style.display='block';
   document.getElementById('app').style.visibility='hidden';
   // Delete this race's data from Supabase (scoped to race code only)
   if(code&&window.supabase){
@@ -3003,6 +3701,74 @@ function supaDeleteNotify(uid_){
 }
 
 // ═══════════════ SUPABASE ENGINE ═══════════════
+
+async function enforceOneHub(){
+  if(!supa||!raceCode||!isHub) return;
+  try{
+    const {data}=await supa.from('timing_points')
+      .select('device_id,point_name,last_seen')
+      .eq('race_code',raceCode)
+      .eq('is_hub',true)
+      .neq('device_id',deviceId);
+    if(data&&data.length){
+      const other=data[0];
+      const ago=Math.floor((Date.now()-new Date(other.last_seen).getTime())/60000);
+      if(ago<30){
+        // Active hub already exists — demote self to marshal
+        isHub=false;
+        const p=JSON.parse(localStorage.getItem(SK_P)||'{}');
+        p.isHub=false; localStorage.setItem(SK_P,JSON.stringify(p));
+        updateHdrPoint();
+        const badge=document.getElementById('hdr-hub-badge');
+        if(badge) badge.style.display='none';
+        toast(`⚠️ Hub already active (${other.point_name}). Switched to Marshal.`,'r');
+        await supa.from('timing_points').upsert({
+          race_code:raceCode,device_id:deviceId,point_name:timingPoint,
+          is_hub:false,last_seen:new Date().toISOString()
+        },{onConflict:'race_code,device_id'});
+        // As marshal, show offline check after pull
+        setTimeout(checkMarshalOfflineReady,4000);
+        return;
+      }
+    }
+    await supaRegisterPoint();
+  }catch(e){console.warn('enforceOneHub:',e);}
+}
+
+function checkMarshalOfflineReady(){
+  if(isHub) return;
+  const count=runners.length;
+  if(count>0){
+    // Runners are loaded — show confirmation banner
+    showOfflineReadyBanner(count);
+  } else {
+    // No runners — warn marshal to stay in coverage until loaded
+    showOfflineNotReadyBanner();
+  }
+}
+
+function showOfflineReadyBanner(count){
+  const existing=document.getElementById('offline-ready-banner');
+  if(existing) existing.remove();
+  const div=document.createElement('div');
+  div.id='offline-ready-banner';
+  div.style.cssText='position:fixed;top:0;left:0;right:0;z-index:9999;background:#00462a;border-bottom:2px solid #00e87a;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;';
+  div.innerHTML=`<span style="color:#00e87a;font-weight:700;font-size:13px;">✅ ${count} runners loaded — ready to go offline</span>
+    <button onclick="document.getElementById('offline-ready-banner').remove()" style="color:#00e87a;font-size:18px;background:none;border:none;cursor:pointer;">✕</button>`;
+  document.body.prepend(div);
+  setTimeout(()=>{ if(div.parentNode) div.remove(); },12000);
+}
+
+function showOfflineNotReadyBanner(){
+  const existing=document.getElementById('offline-ready-banner');
+  if(existing) existing.remove();
+  const div=document.createElement('div');
+  div.id='offline-ready-banner';
+  div.style.cssText='position:fixed;top:0;left:0;right:0;z-index:9999;background:#3d1a00;border-bottom:2px solid #ff7c2a;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;';
+  div.innerHTML=`<span style="color:#ff7c2a;font-weight:700;font-size:13px;">⚠️ No runners loaded — stay in coverage until start list appears</span>
+    <button onclick="document.getElementById('offline-ready-banner').remove()" style="color:#ff7c2a;font-size:18px;background:none;border:none;cursor:pointer;">✕</button>`;
+  document.body.prepend(div);
+}
 
 function initSupabase(){
   if(!raceCode) return;
@@ -3045,13 +3811,19 @@ function supaSubscribe(){
   if(!supa||!raceCode) return;
   if(_realtimeSub) supa.removeChannel(_realtimeSub);
 
-  _realtimeSub=supa.channel('race-'+raceCode)
-    .on('postgres_changes',{event:'INSERT',schema:'public',table:'entries',filter:'race_code=eq.'+raceCode},
-      payload=>{ onRemoteEntry(payload.new); })
-    .on('postgres_changes',{event:'DELETE',schema:'public',table:'entries',filter:'race_code=eq.'+raceCode},
-      payload=>{ supaDeleteNotify(payload.old?.uid); })
+  // Build channel — hub gets entry events, both get runner events (start list sync)
+  let ch = supa.channel('race-'+raceCode);
+  if(isHub){
+    ch = ch
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'entries',filter:'race_code=eq.'+raceCode},
+        payload=>{ onRemoteEntry(payload.new); })
+      .on('postgres_changes',{event:'DELETE',schema:'public',table:'entries',filter:'race_code=eq.'+raceCode},
+        payload=>{ supaDeleteNotify(payload.old?.uid); });
+  }
+  ch = ch
     .on('postgres_changes',{event:'*',schema:'public',table:'runners',filter:'race_code=eq.'+raceCode},
-      payload=>{ if(payload.eventType!=='DELETE') onRemoteRunner(payload.new); })
+      payload=>{ if(payload.eventType!=='DELETE') onRemoteRunner(payload.new); });
+  _realtimeSub = ch
     .subscribe(status=>{
       console.log('Supabase channel status:', status);
       if(status==='SUBSCRIBED'){
@@ -3279,7 +4051,7 @@ async function supaPullRaceData(){
       }
     });
     if(added){
-      sortByBib(); saveR(true); renderRunners(); renderReg(); updBadge();
+      sortByBib(); saveR(true); renderRunners(); renderReg(); updBadge(); updateSetupPanel();
       toast(`📥 ${added} runners pulled from Supabase`,'g');
     }
     // Check for DNF conflicts with existing finishes
@@ -3320,18 +4092,37 @@ async function supaPullRaceData(){
 
 function openSyncModal(){
   document.getElementById('net-race-code').textContent = raceCode||'Not set';
-  // Show clear entries section for non-hub (marshals can clear their own entries)
-  const clearSec=document.getElementById('reg-clear-section');
-  if(clearSec) clearSec.style.display=!isHub&&entries.length?'block':'none';
-  const freshSec=document.getElementById('marshal-fresh-start');
-  if(freshSec) freshSec.style.display=!isHub?'block':'none';
   document.getElementById('net-this-point').textContent = (isHub?'🖥 Hub — ':'📍 ') + (timingPoint||'Unknown');
   document.getElementById('net-status-label').textContent = supaReady ? '● Live' : '○ Offline';
   document.getElementById('net-status-label').style.color = supaReady ? '#1a7a3a' : 'var(--mut)';
+
+  // Hub-only section
+  const hubSec=document.getElementById('sync-hub-section');
+  if(hubSec) hubSec.style.display=isHub?'flex':'none';
   const qLen = _uploadQueue.length;
-  document.getElementById('net-queue-status').textContent = qLen
-    ? `${qLen} item${qLen!==1?'s':''} queued waiting for connection`
-    : 'No queued data — all synced';
+  const qEl=document.getElementById('net-queue-status');
+  if(qEl) qEl.textContent = qLen ? `${qLen} item${qLen!==1?'s':''} queued` : 'All synced';
+
+  // Hub: entries clear
+  const clearSec=document.getElementById('reg-clear-section');
+  if(clearSec) clearSec.style.display=isHub&&entries.length?'block':'none';
+
+  // Marshal-only: fresh start
+  const freshSec=document.getElementById('marshal-fresh-start');
+  if(freshSec) freshSec.style.display=!isHub?'block':'none';
+
+  // Refresh button — only enabled when online
+  const refreshBtn=document.getElementById('sync-refresh-btn');
+  const offlineWarn=document.getElementById('sync-offline-warn');
+  const refreshDesc=document.getElementById('sync-refresh-desc');
+  if(refreshBtn){
+    const online=navigator.onLine&&supaReady;
+    refreshBtn.disabled=!online;
+    refreshBtn.style.opacity=online?'1':'0.45';
+    if(offlineWarn) offlineWarn.style.display=online?'none':'block';
+    if(refreshDesc) refreshDesc.style.display=online?'block':'none';
+  }
+
   loadConnectedPoints();
   showOvl('ovl-sync');
 }
@@ -3364,12 +4155,17 @@ async function loadConnectedPoints(){
 }
 
 async function supaRefreshCache(){
-  // Clear _remoteSplits and re-pull everything fresh from Supabase
+  if(!navigator.onLine||!supaReady){ toast('No connection — cannot refresh','r'); return; }
+  // Warn if marshal has local entries that could be overwritten by runner data refresh
+  if(!isHub && runners.length && runners.some(r=>r.checkedIn||r.status)){
+    const localChanges=runners.filter(r=>r.checkedIn||r.status).length;
+    if(!confirm(`You have ${localChanges} runner${localChanges!==1?'s':''} with local check-in or status changes.\n\nRefreshing will add new runner data from the network but will NOT overwrite check-ins or statuses you've set. Continue?`)) return;
+  }
   window._remoteSplits={};
   const btn=event.target; btn.disabled=true; btn.textContent='🔄 Refreshing…';
   await supaPullRaceData();
   btn.disabled=false; btn.textContent='🔄 Refresh from Network';
-  toast('✅ Cache refreshed from network','g');
+  toast('✅ Refreshed from network','g');
   loadConnectedPoints();
 }
 
@@ -3378,6 +4174,78 @@ function confirmClearEntries(){
     clearAll();
     closeOvl('ovl-sync');
   }
+}
+
+async function marshalExportData(){
+  // Export this marshal's entries as a downloadable JSON file
+  const payload={
+    exportVersion:1,
+    device:timingPoint,
+    deviceId,
+    raceCode,
+    exportedAt:new Date().toISOString(),
+    entries:entries.filter(e=>(e.device||timingPoint)===timingPoint),
+    runnerNotes:runners.filter(r=>r.runnerTags&&r.runnerTags.length||r.status==='DNF'||r.status==='DNS'||r.notes)
+      .map(r=>({bib:r.bib,status:r.status,runnerTags:r.runnerTags||[],notes:r.notes}))
+  };
+  const json=JSON.stringify(payload,null,2);
+  const blob=new Blob([json],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  const ts=new Date().toTimeString().slice(0,5).replace(':','h');
+  a.href=url; a.download=`MTN-${raceCode}-${timingPoint.replace(/\s+/g,'-')}-${ts}.json`;
+  a.click(); URL.revokeObjectURL(url);
+  toast(`📤 Results exported — share file with hub`,'g');
+}
+
+function hubImportMarshalData(){
+  if(!isHub){ toast('Hub only','r'); return; }
+  // Trigger file picker for marshal JSON import
+  const inp=document.createElement('input');
+  inp.type='file'; inp.accept='.json';
+  inp.onchange=async e=>{
+    const file=e.target.files[0]; if(!file) return;
+    try{
+      const text=await file.text();
+      const data=JSON.parse(text);
+      if(!data.exportVersion||!data.entries){ toast('❌ Invalid marshal export file','r'); return; }
+      if(data.raceCode&&data.raceCode!==raceCode){ toast(`❌ Race code mismatch (${data.raceCode} ≠ ${raceCode})`,'r'); return; }
+      // Import entries into remoteSplits (never into own entries[])
+      if(!window._remoteSplits) window._remoteSplits={};
+      let newEntries=0;
+      data.entries.forEach(row=>{
+        if(!window._remoteSplits[row.uid]){
+          window._remoteSplits[row.uid]={
+            uid:row.uid,type:row.type,bib:row.bib,time:row.time,
+            pos:row.pos,device:data.device,timestamp:row.timestamp,
+            point:data.device
+          };
+          newEntries++;
+        }
+      });
+      // Merge runner welfare notes
+      let updatedRunners=0;
+      if(data.runnerNotes&&data.runnerNotes.length){
+        data.runnerNotes.forEach(note=>{
+          const idx=runners.findIndex(r=>r.bib===note.bib);
+          if(idx>=0){
+            const r={...runners[idx]};
+            if(note.status&&note.status!=='active') r.status=note.status;
+            if(note.runnerTags&&note.runnerTags.length){
+              r.runnerTags=[...new Set([...(r.runnerTags||[]),...note.runnerTags])];
+            }
+            if(note.notes&&!r.notes) r.notes=note.notes;
+            runners[idx]=r; updatedRunners++;
+          }
+        });
+        saveR();
+      }
+      renderRunners(); renderReg();
+      toast(`✅ Imported ${newEntries} entries + ${updatedRunners} runner updates from ${data.device}`,'g');
+      closeSyncModal();
+    }catch(err){ toast(`❌ Import failed: ${err.message}`,'r'); }
+  };
+  inp.click();
 }
 
 async function marshalFreshStart(){
@@ -3402,7 +4270,8 @@ async function marshalFreshStart(){
   localStorage.removeItem(SK_P);
   closeOvl('ovl-sync');
   bib=''; ui();
-  document.getElementById('setup-screen').style.display='flex';
+  switchSetupMode('marshal');
+  document.getElementById('setup-screen').style.display='block';
   document.getElementById('app').style.visibility='hidden';
   toast('↺ Fresh start — rejoin with your race code','y');
 }
@@ -3468,11 +4337,62 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape')cb();
 });
 
+// ═══════════════ FULL RESET ═══════════════
+async function fullSystemReset(){
+  // Disconnect Supabase realtime
+  try{
+    if(_realtimeSub && supa){ await supa.removeChannel(_realtimeSub); _realtimeSub=null; }
+  }catch(e){}
+  supaReady=false; supa=null;
+
+  // Clear all localStorage keys
+  const keysToRemove=[SK_E,SK_R,SK_P,SK_STATIONS,SK_IMPORTS,SK_SYNC,'rt_upload_queue'];
+  keysToRemove.forEach(k=>{ try{localStorage.removeItem(k);}catch(e){} });
+
+  // Reset all in-memory state
+  entries=[]; runners=[];
+  _adminStations=[]; _marshalImports={};
+  if(window._uploadQueue!==undefined) _uploadQueue=[];
+  if(window._remoteSplits!==undefined) window._remoteSplits={};
+  timingPoint=''; raceName=''; raceCode=''; isHub=false;
+  bib='';
+
+  // Also unregister service worker cache (best-effort)
+  try{
+    if('caches' in window){
+      const keys=await caches.keys();
+      await Promise.all(keys.map(k=>caches.delete(k)));
+    }
+  }catch(e){}
+
+  // Close modal
+  document.getElementById('ovl-full-reset').style.display='none';
+
+  // Return to setup screen
+  document.getElementById('setup-screen').style.display='block';
+  document.getElementById('setup-marshal-view').style.display='flex';
+  document.getElementById('setup-admin-view').style.display='none';
+  document.getElementById('app').style.visibility='hidden';
+
+  // Clear any displayed bib / numpad
+  const dispEl=document.getElementById('display');
+  if(dispEl) dispEl.textContent='—';
+
+  // Reset renders
+  renderResults(); renderRunners(); renderReg(); updBadge();
+
+  toast('Device wiped — ready for fresh setup','g');
+}
+
 // ═══════════════ INIT ═══════════════
-load(); renderResults(); renderRunners(); renderReg(); updBadge();
+load(); loadStations(); renderResults(); renderRunners(); renderReg(); updBadge();
 // Show setup screen if timing point not configured
 if(!timingPoint){
-  document.getElementById('setup-screen').style.display='flex';
+  const ss=document.getElementById('setup-screen');
+  ss.style.display='block';
+  // Default to marshal view
+  document.getElementById('setup-marshal-view').style.display='flex';
+  document.getElementById('setup-admin-view').style.display='none';
   document.getElementById('app').style.visibility='hidden';
 } else {
   document.getElementById('setup-screen').style.display='none';
@@ -3480,5 +4400,33 @@ if(!timingPoint){
   updateHdrPoint();
 }
 </script>
+
+<!-- STATION QR SHEET (top-level modal) -->
+<div id="setup-qr-sheet" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.7);align-items:center;justify-content:center;" onclick="if(event.target===this)document.getElementById('setup-qr-sheet').style.display='none';">
+  <div style="background:#fff;border-radius:12px;padding:20px;max-width:340px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.4);">
+    <div style="font-size:.9rem;font-weight:700;color:#1a1a1a;margin-bottom:2px;" id="qr-sheet-title">Station QR</div>
+    <div style="font-size:.72rem;font-family:'DM Mono',monospace;color:var(--acc);margin-bottom:14px;letter-spacing:1px;" id="qr-sheet-code"></div>
+    <div id="qr-sheet-canvas" style="display:flex;justify-content:center;margin-bottom:10px;"></div>
+    <div style="font-size:.65rem;color:var(--mut);margin-bottom:14px;">Marshal scans this to configure their device automatically</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn" onclick="document.getElementById('setup-qr-sheet').style.display='none';" style="flex:1;padding:10px;">Close</button>
+      <button class="btn acc" onclick="printStationQR()" style="flex:1;padding:10px;">🖨 Print</button>
+    </div>
+  </div>
+</div>
+
+<!-- FULL SYSTEM RESET CONFIRM -->
+<div id="ovl-full-reset" style="display:none;position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.8);align-items:center;justify-content:center;" onclick="if(event.target===this)document.getElementById('ovl-full-reset').style.display='none';">
+  <div style="background:#fff;border-radius:12px;padding:20px;max-width:340px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.5);">
+    <div style="font-size:1.4rem;margin-bottom:8px;">⚠️</div>
+    <div style="font-size:.95rem;font-weight:700;color:#901818;margin-bottom:6px;">Full System Reset</div>
+    <div style="font-size:.75rem;color:#444;margin-bottom:16px;line-height:1.5;">This will erase <strong>everything</strong> on this device — all entries, runners, stations, race settings, and cached data. The device will return to first-run state.<br><br>This cannot be undone.</div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn" onclick="document.getElementById('ovl-full-reset').style.display='none';" style="flex:1;padding:11px;">Cancel</button>
+      <button class="btn red" onclick="fullSystemReset()" style="flex:1;padding:11px;background:#901818;color:#fff;font-weight:700;">Wipe & Reset</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
