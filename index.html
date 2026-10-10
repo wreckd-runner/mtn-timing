@@ -657,6 +657,27 @@ tbody tr.rdata:active{background:#f0f0ea;}
           <button class="nb" onclick="startQRScan()" id="qr-btn" title="Scan QR code" style="font-size:1.1rem;">📷</button>
         </div>
 
+        <!-- Mode toggle — sliding pill switch -->
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <!-- Sliding toggle track -->
+          <div id="mode-track" onclick="setBurstMode(!_burstMode)"
+               style="position:relative;width:120px;height:30px;border-radius:15px;background:var(--surf2);border:1px solid var(--bdr);cursor:pointer;flex-shrink:0;transition:background .2s,border-color .2s;user-select:none;-webkit-user-select:none;">
+            <!-- Labels inside track -->
+            <span id="mode-lbl-normal" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:.65rem;font-weight:700;color:var(--acc);z-index:1;pointer-events:none;transition:opacity .2s;">⬤ Normal</span>
+            <span id="mode-lbl-burst"  style="position:absolute;right:7px;top:50%;transform:translateY(-50%);font-size:.65rem;font-weight:700;color:var(--mut);z-index:1;pointer-events:none;transition:opacity .2s;">⚡ Burst</span>
+            <!-- Sliding thumb -->
+            <div id="mode-thumb"
+                 style="position:absolute;top:3px;left:3px;width:56px;height:22px;border-radius:11px;background:var(--acc);transition:transform .2s,background .2s;pointer-events:none;z-index:2;"></div>
+          </div>
+          <!-- Stamp button — only visible in burst mode -->
+          <button id="stamp-btn" onclick="stampTime()" style="display:none;flex:1;padding:6px 0;font-size:.72rem;font-weight:700;border-radius:6px;border:1px solid var(--tel);background:var(--tel);color:#fff;cursor:pointer;transition:all .15s;">⏱ Stamp</button>
+        </div>
+        <!-- Burst mode queue display -->
+        <div id="burst-bar" style="display:none;background:rgba(30,120,200,.1);border:1px solid var(--tel);border-radius:6px;padding:6px 10px;margin-bottom:4px;align-items:center;gap:8px;">
+          <span style="font-size:.68rem;color:var(--tel);font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Next</span>
+          <span id="burst-time-display" style="font-family:'DM Mono',monospace;font-size:.9rem;font-weight:700;color:var(--tel);flex:1;">—</span>
+          <span id="burst-queue-count" style="font-size:.75rem;font-weight:700;color:var(--tel);background:rgba(30,120,200,.2);border-radius:4px;padding:1px 6px;">0 queued</span>
+        </div>
         <div style="display:flex;gap:6px;">
           <button class="rbtn" id="rbtn" onclick="rec()" disabled style="flex:1;">Record Finish</button>
           <button class="btn" onclick="undo()" style="flex-shrink:0;padding:14px 16px;font-size:1rem;" title="Undo last entry">↩</button>
@@ -842,6 +863,14 @@ tbody tr.rdata:active{background:#f0f0ea;}
           <button onclick="openPointSettings()" class="btn" style="width:100%;margin-top:10px;padding:8px;font-size:.75rem;">✏ Change Station Settings</button>
         </div>
 
+        <!-- Preflight push to cloud -->
+        <div id="preflight-push-card" style="background:rgba(30,120,200,.07);border:1px solid var(--tel);border-radius:8px;padding:12px;">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--tel);margin-bottom:4px;">🛫 Preflight — Push to Cloud</div>
+          <div style="font-size:.72rem;color:var(--mut2);margin-bottom:10px;line-height:1.4;">Built the participant list on this device pre-race? Push runners and config to the cloud so the hub can pull them down on race day. No entries are transferred — just the start list.</div>
+          <button onclick="preflightPush()" id="preflight-push-btn" style="width:100%;padding:10px;background:var(--tel);color:#fff;border:none;border-radius:6px;font-weight:700;font-size:.78rem;cursor:pointer;">☁ Push Start List to Cloud</button>
+          <div id="preflight-push-status" style="font-size:.7rem;color:var(--mut);margin-top:6px;min-height:14px;text-align:center;"></div>
+        </div>
+
         <!-- Runner list (from hub CSV) -->
         <div style="background:var(--surf2);border:1px solid var(--bdr);border-radius:8px;padding:12px;">
           <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:6px;">Participant List</div>
@@ -1001,6 +1030,9 @@ tbody tr.rdata:active{background:#f0f0ea;}
       <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:2px;">Hub Actions</div>
       <button class="btn acc" onclick="supaManualSync()" style="width:100%;padding:10px;font-size:.78rem;">↑ Push Queued Data</button>
       <button onclick="openImportGeneral()" style="width:100%;padding:10px;background:#0a2535;border:1px solid #4a9eff;color:#4a9eff;border-radius:6px;font-weight:700;font-size:.78rem;cursor:pointer;">📥 Import Marshal Results</button>
+      <!-- Preflight pull — load start list pushed from another device pre-race -->
+      <button onclick="preflightPull()" style="width:100%;padding:10px;background:rgba(30,120,200,.1);border:1px solid var(--tel);color:var(--tel);border-radius:6px;font-weight:700;font-size:.78rem;cursor:pointer;">🛫 Pull Preflight Start List</button>
+      <div id="preflight-pull-status" style="font-size:.7rem;color:var(--mut);text-align:center;min-height:14px;"></div>
       <div id="net-queue-status" style="font-size:.68rem;color:var(--mut);text-align:center;"></div>
     </div>
 
@@ -1483,10 +1515,97 @@ function hideW(){
   document.getElementById('bnum').style.color='';
 }
 
+// ═══════════════ BURST MODE ═══════════════
+// Each stamp pushes {time, ts} onto the queue.
+// Each recorded bib pops the oldest stamp (FIFO — parkrun style).
+// When the queue empties, burst mode auto-exits.
+let _burstMode=false;
+let _stampQueue=[]; // [{time:'HH:MM:SS', ts:epochMs}, ...]
+
+function _updateBurstBar(){
+  const bar=document.getElementById('burst-bar');
+  const disp=document.getElementById('burst-time-display');
+  const cnt=document.getElementById('burst-queue-count');
+  if(!bar) return;
+  const n=_stampQueue.length;
+  if(disp) disp.textContent=n>0?_stampQueue[0].time:'—';
+  if(cnt){
+    cnt.textContent=n===1?'1 queued':`${n} queued`;
+    cnt.style.background=n>0?'rgba(30,120,200,.3)':'rgba(30,120,200,.1)';
+    cnt.style.color=n>0?'var(--tel)':'var(--mut)';
+  }
+}
+
+function setBurstMode(on){
+  _burstMode=on;
+  if(!on){ _stampQueue=[]; }
+  // --- Sliding toggle ---
+  const track=document.getElementById('mode-track');
+  const thumb=document.getElementById('mode-thumb');
+  const lblN=document.getElementById('mode-lbl-normal');
+  const lblB=document.getElementById('mode-lbl-burst');
+  if(track){
+    track.style.background=on?'rgba(30,120,200,.15)':'var(--surf2)';
+    track.style.borderColor=on?'var(--tel)':'var(--bdr)';
+  }
+  if(thumb){
+    // Thumb slides right (burst) or left (normal). Track 120px wide, thumb 56px + 3px left = 3..61px range
+    thumb.style.transform=on?'translateX(57px)':'translateX(0)';
+    thumb.style.background=on?'var(--tel)':'var(--acc)';
+  }
+  if(lblN){ lblN.style.opacity=on?'0.3':'1'; lblN.style.color=on?'var(--mut)':'var(--acc)'; }
+  if(lblB){ lblB.style.opacity=on?'1':'0.3'; lblB.style.color=on?'var(--tel)':'var(--mut)'; }
+  // --- Stamp button ---
+  const sb=document.getElementById('stamp-btn');
+  if(sb) sb.style.display=on?'':'none';
+  // --- Queue bar ---
+  const bar=document.getElementById('burst-bar');
+  if(bar) bar.style.display=on?'flex':'none';
+  _updateBurstBar();
+  const rbtn=document.getElementById('rbtn');
+  if(rbtn&&!on) rbtn.textContent='Record Finish';
+  ui();
+}
+
+function stampTime(){
+  const ts=Date.now();
+  const time=new Date(ts).toTimeString().slice(0,8);
+  _stampQueue.push({time,ts});
+  _updateBurstBar();
+  // Pulse bar to confirm
+  const bar=document.getElementById('burst-bar');
+  if(bar){ bar.style.background='rgba(30,120,200,.3)'; setTimeout(()=>{ bar.style.background='rgba(30,120,200,.1)'; },300); }
+  toast(`⏱ Stamped ${time} · ${_stampQueue.length} in queue`,'t');
+  ui();
+}
+
 // ═══════════════ RECORD ═══════════════
 function rec(){
   if(!bib)return;
-  const b=bib, time=new Date().toTimeString().slice(0,8);
+  const b=bib;
+  const wasInBurst=_burstMode; // capture before queue-empty may flip mode
+  // In burst mode, pop the oldest stamp from the queue (parkrun-style FIFO).
+  // If the queue is empty, auto-exit burst and fall through to normal timing.
+  let time, recTs;
+  if(_burstMode){
+    if(_stampQueue.length===0){
+      // No stamps left — exit burst mode automatically
+      setBurstMode(false);
+      toast('⚡ All stamps used — back to Normal mode','y');
+      recTs=Date.now(); time=new Date(recTs).toTimeString().slice(0,8);
+    } else {
+      const stamp=_stampQueue.shift(); // FIFO — oldest first
+      time=stamp.time; recTs=stamp.ts;
+      _updateBurstBar();
+      // Auto-exit when queue now empty
+      if(_stampQueue.length===0){
+        setBurstMode(false);
+        toast('⚡ Last stamp used — back to Normal mode','y');
+      }
+    }
+  } else {
+    recTs=Date.now(); time=new Date(recTs).toTimeString().slice(0,8);
+  }
   const pos=entries.filter(e=>e.type==='finish').length+1;
   const base=baseBib(b);
   const prev=entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===base);
@@ -1529,7 +1648,7 @@ function rec(){
     hasFlag=true;
     flagReason=(flagReason?flagReason+' ':'')+'Team member '+dnfMembers.map(p=>`${p.bib} (${p.status})`).join(', ')+' — tracking issue.';
   }
-  const newEntry={uid:uid(),type:'finish',pos,bib:b,time,timestamp:Date.now(),isTeam,hasFlag,flagReason,tags:[],device:timingPoint};
+  const newEntry={uid:uid(),type:'finish',pos,bib:b,time,timestamp:recTs,isTeam,hasFlag,flagReason,tags:[],device:timingPoint};
   entries.push(newEntry);
   recheckTeamFlags();
   saveE();
@@ -1538,7 +1657,7 @@ function rec(){
   const r=runners.find(x=>baseBib(x.bib)===baseBib(b));
   const le=document.getElementById('le');
   le.className='le show';
-  le.innerHTML=`✅ <strong>BIB ${b}</strong>${r&&r.name?` — ${esc(r.name)}`:''} · Pos <strong>${pos}</strong> · ${time}`
+  le.innerHTML=`✅ <strong>BIB ${b}</strong>${r&&r.name?` — ${esc(r.name)}`:''} · Pos <strong>${pos}</strong> · ${time}`+(wasInBurst?' <span style="color:var(--tel);font-size:.75em;">⚡</span>':'')
     +(finalEntry.isTeam?` <span style="color:var(--blu)">[TEAM]</span>`:'')+
     (finalEntry.hasFlag?` <span style="color:var(--yel)">⚠ REVIEW</span>`:'');
   toast(finalEntry.hasFlag?`⚠ BIB ${b} flagged`:finalEntry.isTeam?`👥 Team BIB ${b} — pos ${pos}`:`✅ BIB ${b} — pos ${pos}`,finalEntry.hasFlag?'y':finalEntry.isTeam?'b':'g');
@@ -2778,6 +2897,9 @@ function updateSetupPanel(){
     runnerStatus.textContent=n?`${n} participant${n!==1?'s':''} loaded`:'No runners loaded.';
   }
   if(runnerWarn) runnerWarn.style.display=runners.length?'none':'block';
+  // Preflight card: only useful on non-hub devices (pre-race admin device)
+  const preflightCard=document.getElementById('preflight-push-card');
+  if(preflightCard) preflightCard.style.display=isHub?'none':'block';
 }
 
 function openSetupQRScan(){
@@ -4440,6 +4562,88 @@ async function marshalFreshStart(){
   document.getElementById('setup-screen').style.display='block';
   document.getElementById('app').style.visibility='hidden';
   toast('↺ Fresh start — rejoin with your race code','y');
+}
+
+// ═══════════════ PREFLIGHT ═══════════════
+// Push: pre-race device uploads runners + config so the hub can pull them.
+// Pull: hub ingests that start list as its base data (never touches entries).
+
+async function preflightPush(){
+  const statusEl=document.getElementById('preflight-push-status');
+  const btn=document.getElementById('preflight-push-btn');
+  if(!raceCode){ if(statusEl) statusEl.textContent='⚠ No race code set — configure your station first.'; return; }
+  if(!runners.length){ if(statusEl) statusEl.textContent='⚠ No runners loaded yet.'; return; }
+  if(!window.supabase){ if(statusEl) statusEl.textContent='⚠ No network connection.'; return; }
+  if(btn){ btn.disabled=true; btn.textContent='Pushing…'; }
+  if(statusEl) statusEl.textContent='';
+  try{
+    const sb=supa||window.supabase.createClient(SUPA_URL,SUPA_KEY);
+    // Upsert race row with config
+    await sb.from('races').upsert({
+      race_code:raceCode, name:raceName||raceCode,
+      created_by:deviceId, is_active:true,
+      preflight_config:JSON.stringify({raceName,timingPoint,raceCode})
+    },{onConflict:'race_code'});
+    // Upsert all runners
+    const rows=runners.map(r=>({
+      bib:r.bib, race_code:raceCode, name:r.name||'',
+      team_name:r.teamName||'', distance:r.distance||'',
+      wave:r.wave||'', age:r.age||'', gender:r.gender||'',
+      conditions:r.conditions||'', notes:r.notes||'',
+      team_partner_bib:r.teamPartnerBib||'', status:r.status||'',
+      checked_in:r.checkedIn||false, check_in_time:r.checkInTime||'',
+      change_log:r.changeLog||[], runner_tags:r.runnerTags||[]
+    }));
+    // Batch in chunks of 200
+    for(let i=0;i<rows.length;i+=200){
+      const {error}=await sb.from('runners').upsert(rows.slice(i,i+200),{onConflict:'bib,race_code'});
+      if(error) throw error;
+    }
+    if(statusEl) statusEl.textContent=`✅ ${runners.length} runners pushed · Race: ${raceName||raceCode}`;
+    toast(`🛫 Preflight pushed — ${runners.length} runners`,'g');
+  } catch(e){
+    console.warn('preflightPush error:',e);
+    if(statusEl) statusEl.textContent='❌ Push failed: '+(e.message||e);
+    toast('❌ Preflight push failed','r');
+  } finally{
+    if(btn){ btn.disabled=false; btn.textContent='☁ Push Start List to Cloud'; }
+  }
+}
+
+async function preflightPull(){
+  const statusEl=document.getElementById('preflight-pull-status');
+  if(!raceCode){ if(statusEl) statusEl.textContent='⚠ No race code set.'; return; }
+  if(!isHub){ if(statusEl) statusEl.textContent='⚠ Only the hub can pull a preflight start list.'; return; }
+  if(!supa&&!window.supabase){ if(statusEl) statusEl.textContent='⚠ No network connection.'; return; }
+  if(statusEl) statusEl.textContent='Pulling…';
+  try{
+    const sb=supa||window.supabase.createClient(SUPA_URL,SUPA_KEY);
+    const {data:rData,error}=await sb.from('runners').select('*').eq('race_code',raceCode);
+    if(error) throw error;
+    if(!rData?.length){ if(statusEl) statusEl.textContent='⚠ No preflight data found for this race code.'; return; }
+    let added=0, updated=0;
+    rData.forEach(row=>{
+      const existing=runners.find(r=>r.bib===row.bib);
+      const mapped={
+        bib:row.bib, name:row.name||'', teamName:row.team_name||'',
+        distance:row.distance||'', wave:row.wave||'', age:row.age||'',
+        gender:row.gender||'', conditions:row.conditions||'', notes:row.notes||'',
+        teamPartnerBib:row.team_partner_bib||'', status:row.status||'',
+        checkedIn:row.checked_in||false, checkInTime:row.check_in_time||'',
+        changeLog:row.change_log||[], runnerTags:row.runner_tags||[]
+      };
+      if(existing){ Object.assign(existing,mapped); updated++; }
+      else{ runners.push(mapped); added++; }
+    });
+    sortByBib(); saveR(true); renderRunners(); renderReg(); updBadge(); updateSetupPanel();
+    const msg=`✅ ${added} added, ${updated} updated`;
+    if(statusEl) statusEl.textContent=msg;
+    toast(`🛫 Preflight loaded — ${added+updated} runners`,'g');
+  } catch(e){
+    console.warn('preflightPull error:',e);
+    if(statusEl) statusEl.textContent='❌ Pull failed: '+(e.message||e);
+    toast('❌ Preflight pull failed','r');
+  }
 }
 
 async function supaManualSync(){
