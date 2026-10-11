@@ -15,27 +15,29 @@
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script>
 // ── PWA Service Worker ─────────────────────────────────────────────────────
+// Single cache name — used by SW and the manual pre-cache below
+const MTN_CACHE = 'mtn-v4';
+const MTN_CDN = [
+  'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
+  'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
+  'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js',
+];
+
 if('serviceWorker' in navigator){
   const swCode = `
-const CACHE = 'mtn-v3';
-const APP_URL = self.location.origin + '/';
+const CACHE = 'mtn-v4';
 const CDN = [
   'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
   'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js',
-  'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap',
 ];
-
-// On install — cache everything immediately
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(CACHE).then(cache =>
-      // Cache CDN resources — ignore failures (they'll be cached on first fetch)
-      Promise.allSettled(CDN.map(url => cache.add(url)))
-    ).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      .then(cache => Promise.allSettled(CDN.map(u => cache.add(u))))
+      .then(() => self.skipWaiting())
   );
 });
-
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
@@ -43,66 +45,64 @@ self.addEventListener('activate', e => {
       .then(() => self.clients.claim())
   );
 });
-
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  // Never intercept Supabase
-  if(url.hostname.includes('supabase.co')) return;
-  // Cache-first for everything — network updates cache in background
+  // Never intercept Supabase or Google Fonts CSS (they set CORS headers we can't clone)
+  if(url.hostname.includes('supabase.co') || url.hostname.includes('fonts.g')) return;
+  if(e.request.method !== 'GET') return;
   e.respondWith(
     caches.open(CACHE).then(cache =>
       cache.match(e.request).then(cached => {
         const fresh = fetch(e.request).then(res => {
-          if(res && res.status === 200 && e.request.method === 'GET')
-            cache.put(e.request, res.clone());
+          if(res && res.status === 200) cache.put(e.request, res.clone());
           return res;
         }).catch(() => null);
-        // Return cached immediately if available, else wait for network
-        return cached || fresh;
+        return cached || fresh; // serve cache instantly, refresh in background
       })
     )
   );
 });
 `;
-  // Use /sw.js if available (GitHub+Netlify deploy), else blob fallback
-  const tryRegister = (url) => navigator.serviceWorker.register(url)
+  const blob = new Blob([swCode], {type:'application/javascript'});
+  const swUrl = URL.createObjectURL(blob);
+  // scope: './' makes the blob SW control the page's own directory
+  navigator.serviceWorker.register(swUrl, {scope: './'})
     .then(reg => {
-      console.log('MTN SW registered:', url);
-      // Force immediate activation
       if(reg.waiting) reg.waiting.postMessage({type:'SKIP_WAITING'});
+      console.log('MTN SW registered (blob, scope ./)', reg.scope);
+    })
+    .catch(() => {
+      // Fallback: try /sw.js for GitHub/Netlify deploys
+      navigator.serviceWorker.register('/sw.js').catch(e => console.warn('SW unavailable:', e));
     });
-
-  // Try /sw.js first (proper scope), fall back to blob
-  tryRegister('/sw.js').catch(() => {
-    const blob = new Blob([swCode], {type:'application/javascript'});
-    tryRegister(URL.createObjectURL(blob)).catch(e => console.warn('SW failed:', e));
-  });
-
-  // Also directly cache the app when loaded online
-  if(navigator.onLine){
-    window.addEventListener('load', () => {
-      setTimeout(async () => {
-        try {
-          const cache = await caches.open('mtn-v3');
-          // Cache the app page itself
-          const appRes = await fetch(window.location.href);
-          if(appRes.ok) await cache.put(window.location.href, appRes);
-          // Cache CDN scripts
-          await Promise.allSettled(CDN.map(async url => {
-            if(!(await cache.match(url))){
-              const r = await fetch(url);
-              if(r.ok) await cache.put(url, r);
-            }
-          }));
-          console.log('MTN: app pre-cached for offline use');
-        } catch(e){ console.warn('Pre-cache failed:', e); }
-      }, 2000);
-    });
-  }
 }
+
+// ── Manual pre-cache (belt + braces — works even if SW scope is wrong) ──────
+// Writes the app HTML and CDN scripts into Cache Storage directly.
+// On an offline reload, the SW serves from cache; if SW scope missed, the
+// browser still finds the response in Cache Storage for same-origin requests.
+window.addEventListener('load', () => setTimeout(async () => {
+  if(!navigator.onLine) return;
+  try {
+    const cache = await caches.open(MTN_CACHE);
+    // Cache this page
+    const appRes = await fetch(window.location.href);
+    if(appRes.ok) await cache.put(window.location.href, appRes);
+    // Cache CDN scripts (skip if already stored)
+    await Promise.allSettled(MTN_CDN.map(async url => {
+      if(await cache.match(url)) return;
+      const r = await fetch(url);
+      if(r.ok) await cache.put(url, r);
+    }));
+    console.log('MTN: pre-cached for offline use');
+  } catch(e){ console.warn('MTN: pre-cache failed:', e.message); }
+}, 2500));
 </script>
+<!-- Fonts: preconnect + load with font-display:swap so offline = system font, not invisible text -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 
@@ -1427,32 +1427,7 @@ const saveR=(skipQueue=false)=>{
   }
 };
 
-// ═══════════════ SELF CACHE ═══════════════
-// Cache the app immediately on load — works even without SW
-async function selfCache(){
-  try {
-    const cache = await caches.open('mtn-v2');
-    // Cache current page
-    const response = await fetch(window.location.href);
-    if(response.ok) await cache.put(window.location.href, response);
-    // Cache CDN dependencies
-    const cdnUrls = [
-      'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
-      'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
-      'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js',
-      'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap',
-    ];
-    await Promise.allSettled(cdnUrls.map(url =>
-      cache.match(url).then(cached => {
-        if(cached) return; // already cached
-        return fetch(url).then(r => { if(r.ok) return cache.put(url, r); });
-      })
-    ));
-    console.log('MTN: app cached for offline use');
-  } catch(e) { console.warn('MTN: cache failed:', e.message); }
-}
-// Run self-cache after page is fully loaded
-window.addEventListener('load', () => setTimeout(selfCache, 2000));
+// (pre-cache handled at top of file)
 
 // ═══════════════ CLOCK ═══════════════
 const tick=()=>document.getElementById('clock').textContent=new Date().toTimeString().slice(0,8);
