@@ -2662,21 +2662,65 @@ function renderStationsPanel(){
       ? `<div style="font-size:.65rem;background:#ddf0ee;color:#006b5e;border-radius:4px;padding:3px 6px;margin-top:4px;">✅ ${imp.entryCount} entries imported · ${imp.importedAt}</div>`
       : `<div style="font-size:.65rem;color:var(--mut);margin-top:4px;">No results imported yet</div>`;
     return `
-    <div style="background:#fff;border:1px solid var(--bdr);border-radius:8px;padding:12px;">
+    <div style="background:#fff;border:1px solid var(--bdr);border-radius:8px;padding:12px;" id="station-card-${i}">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px;">
-        <div>
-          <div style="font-size:.85rem;font-weight:700;">📍 ${esc(s.name)}</div>
+        <div style="flex:1;min-width:0;">
+          <div id="station-name-display-${i}" style="font-size:.85rem;font-weight:700;cursor:pointer;" onclick="startRenameStation(${i})" title="Tap to rename">📍 ${esc(s.name)} <span style="font-size:.6rem;color:var(--mut);font-weight:400;">✎</span></div>
+          <div id="station-name-edit-${i}" style="display:none;margin-bottom:4px;">
+            <input id="station-name-input-${i}" value="${esc(s.name)}" style="font-size:.85rem;font-weight:700;border:1px solid var(--acc);border-radius:4px;padding:3px 6px;width:100%;background:var(--bg);color:var(--txt);"
+              onkeydown="if(event.key==='Enter')commitRenameStation(${i});if(event.key==='Escape')cancelRenameStation(${i})">
+            <div style="display:flex;gap:4px;margin-top:4px;">
+              <button onclick="commitRenameStation(${i})" style="font-size:.68rem;padding:3px 8px;background:var(--acc);color:#fff;border:none;border-radius:4px;cursor:pointer;">Save</button>
+              <button onclick="cancelRenameStation(${i})" style="font-size:.68rem;padding:3px 8px;background:var(--surf2);color:var(--mut);border:1px solid var(--bdr);border-radius:4px;cursor:pointer;">Cancel</button>
+            </div>
+          </div>
           <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:var(--mut);">${code}</div>
         </div>
-        <div style="display:flex;gap:5px;flex-shrink:0;">
+        <div style="display:flex;gap:5px;flex-shrink:0;align-items:flex-start;">
           <button onclick="showStationQR(${i},'panel')" class="btn" style="padding:5px 10px;font-size:.68rem;background:#1a4a8a;color:#fff;border:none;">QR</button>
           <button onclick="openImportForStation(${i})" class="btn acc" style="padding:5px 10px;font-size:.68rem;">📥 Import</button>
+          <button onclick="confirmRemoveStation(${i})" style="padding:5px 8px;font-size:.72rem;background:none;border:1px solid #c04040;color:#c04040;border-radius:5px;cursor:pointer;" title="Remove station">✕</button>
+        </div>
+      </div>
+      <div id="station-delete-confirm-${i}" style="display:none;background:#fdeaea;border:1px solid #c04040;border-radius:6px;padding:8px;margin-top:6px;">
+        <div style="font-size:.72rem;color:#901818;margin-bottom:6px;">Remove <strong>${esc(s.name)}</strong>? This only removes it from the station list — imported entries are kept.</div>
+        <div style="display:flex;gap:6px;">
+          <button onclick="cancelRemoveStation(${i})" style="flex:1;font-size:.7rem;padding:5px;background:var(--surf2);border:1px solid var(--bdr);border-radius:4px;cursor:pointer;">Cancel</button>
+          <button onclick="removeStation(${i})" style="flex:1;font-size:.7rem;padding:5px;background:#c04040;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700;">Remove</button>
         </div>
       </div>
       ${impBadge}
       ${imp&&imp.entryCount?`<button onclick="showStationResults('${s.slug}')" style="margin-top:8px;background:none;border:none;color:var(--acc);font-size:.7rem;cursor:pointer;padding:0;">View imported entries →</button>`:''}
     </div>`;
   }).join('');
+}
+
+function startRenameStation(i){
+  document.getElementById('station-name-display-'+i).style.display='none';
+  document.getElementById('station-name-edit-'+i).style.display='block';
+  const inp=document.getElementById('station-name-input-'+i);
+  if(inp){ inp.focus(); inp.select(); }
+}
+function cancelRenameStation(i){
+  document.getElementById('station-name-display-'+i).style.display='';
+  document.getElementById('station-name-edit-'+i).style.display='none';
+}
+function commitRenameStation(i){
+  const inp=document.getElementById('station-name-input-'+i);
+  const newName=(inp?.value||'').trim();
+  if(!newName) return cancelRenameStation(i);
+  if(_adminStations[i]){
+    _adminStations[i].name=newName;
+    saveStations();
+    renderStationsPanel();
+    toast(`✏ Station renamed to "${newName}"`,'g');
+  }
+}
+function confirmRemoveStation(i){
+  document.getElementById('station-delete-confirm-'+i).style.display='block';
+}
+function cancelRemoveStation(i){
+  document.getElementById('station-delete-confirm-'+i).style.display='none';
 }
 
 function openImportForStation(i){
