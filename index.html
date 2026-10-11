@@ -745,7 +745,7 @@ tbody tr.rdata:active{background:#f0f0ea;}
       <div class="run-top">
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <span style="font-family:'DM Sans',sans-serif;font-weight:700;font-size:.85rem;letter-spacing:2px;text-transform:uppercase;color:#1a1a1a;" id="rtitle">Runners (0)</span>
-          <div style="display:flex;gap:6px;">
+          <div id="runners-hub-btns" style="display:flex;gap:6px;">
             <button class="btn red" id="runners-reset-btn" onclick="showOvl('ovl-reset')" style="padding:6px 10px;font-size:.62rem;">🔄 Reset</button>
             <button class="btn grn" id="runners-add-btn" onclick="openRunnerMod()" style="padding:6px 12px;">＋ Add</button>
           </div>
@@ -756,11 +756,16 @@ tbody tr.rdata:active{background:#f0f0ea;}
           <div class="sc"><div class="sv" style="color:#901818" id="rs-dnf">0</div><div class="sl">DNF</div></div>
           <div class="sc"><div class="sv" style="color:#6a5000" id="rs-dns">0</div><div class="sl">DNS</div></div>
         </div>
-        <div class="upa" onclick="document.getElementById('csvf').click()">
+        <!-- CSV upload — hub only -->
+        <div id="runners-csv-upload" class="upa" onclick="document.getElementById('csvf').click()">
           <input type="file" id="csvf" accept=".csv,.txt" onchange="loadCSV(event)">
           <div class="upa-i">📂</div>
           <div class="upa-t">Upload Participant CSV</div>
           <div class="upa-s">bib · name · distance · wave · age cat · gender · conditions · notes · partner · team name</div>
+        </div>
+        <!-- Marshal read-only notice -->
+        <div id="runners-marshal-notice" style="display:none;font-size:.7rem;color:var(--mut);background:var(--surf2);border:1px solid var(--bdr);border-radius:6px;padding:8px 10px;line-height:1.4;">
+          📋 Participant list loaded from hub — read only. Mark <strong>DNF</strong> / <strong>DNS</strong> locally for your records. Report withdrawals to the hub marshal directly.
         </div>
         <input class="srch" type="text" id="rsrch" placeholder="Search name, bib, wave, distance…" oninput="renderRunners()">
         <div class="chips" id="rchips">
@@ -861,14 +866,6 @@ tbody tr.rdata:active{background:#f0f0ea;}
             <span style="font-size:.75rem;font-family:'DM Mono',monospace;color:var(--acc);" id="setup-panel-code">—</span>
           </div>
           <button onclick="openPointSettings()" class="btn" style="width:100%;margin-top:10px;padding:8px;font-size:.75rem;">✏ Change Station Settings</button>
-        </div>
-
-        <!-- Preflight push to cloud -->
-        <div id="preflight-push-card" style="background:rgba(30,120,200,.07);border:1px solid var(--tel);border-radius:8px;padding:12px;">
-          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--tel);margin-bottom:4px;">🛫 Preflight — Push to Cloud</div>
-          <div style="font-size:.72rem;color:var(--mut2);margin-bottom:10px;line-height:1.4;">Built the participant list on this device pre-race? Push runners and config to the cloud so the hub can pull them down on race day. No entries are transferred — just the start list.</div>
-          <button onclick="preflightPush()" id="preflight-push-btn" style="width:100%;padding:10px;background:var(--tel);color:#fff;border:none;border-radius:6px;font-weight:700;font-size:.78rem;cursor:pointer;">☁ Push Start List to Cloud</button>
-          <div id="preflight-push-status" style="font-size:.7rem;color:var(--mut);margin-top:6px;min-height:14px;text-align:center;"></div>
         </div>
 
         <!-- Runner list (from hub CSV) -->
@@ -1030,9 +1027,14 @@ tbody tr.rdata:active{background:#f0f0ea;}
       <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:2px;">Hub Actions</div>
       <button class="btn acc" onclick="supaManualSync()" style="width:100%;padding:10px;font-size:.78rem;">↑ Push Queued Data</button>
       <button onclick="openImportGeneral()" style="width:100%;padding:10px;background:#0a2535;border:1px solid #4a9eff;color:#4a9eff;border-radius:6px;font-weight:700;font-size:.78rem;cursor:pointer;">📥 Import Marshal Results</button>
-      <!-- Preflight pull — load start list pushed from another device pre-race -->
-      <button onclick="preflightPull()" style="width:100%;padding:10px;background:rgba(30,120,200,.1);border:1px solid var(--tel);color:var(--tel);border-radius:6px;font-weight:700;font-size:.78rem;cursor:pointer;">🛫 Pull Preflight Start List</button>
-      <div id="preflight-pull-status" style="font-size:.7rem;color:var(--mut);text-align:center;min-height:14px;"></div>
+      <!-- Preflight — hub pushes its runner list to cloud for marshals to pull; or pulls a list built on another device pre-race -->
+      <div style="background:rgba(30,120,200,.06);border:1px solid var(--tel);border-radius:6px;padding:10px;display:flex;flex-direction:column;gap:6px;">
+        <div style="font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--tel);">🛫 Start List — Cloud Sync</div>
+        <button onclick="preflightPush()" id="preflight-push-btn" style="width:100%;padding:8px;background:var(--tel);color:#fff;border:none;border-radius:5px;font-weight:700;font-size:.75rem;cursor:pointer;">☁ Push Start List to Cloud</button>
+        <button onclick="preflightPull()" style="width:100%;padding:8px;background:rgba(30,120,200,.1);border:1px solid var(--tel);color:var(--tel);border-radius:5px;font-weight:700;font-size:.75rem;cursor:pointer;">⬇ Pull Start List from Cloud</button>
+        <div id="preflight-pull-status" style="font-size:.68rem;color:var(--mut);text-align:center;min-height:12px;"></div>
+        <div id="preflight-push-status" style="font-size:.68rem;color:var(--mut);text-align:center;min-height:12px;"></div>
+      </div>
       <div id="net-queue-status" style="font-size:.68rem;color:var(--mut);text-align:center;"></div>
     </div>
 
@@ -2921,8 +2923,16 @@ function updateHdrPoint(){
   if(stTab) stTab.style.display=isHub?'flex':'none';
   const setupTab=document.getElementById('tab-setup');
   if(setupTab) setupTab.style.display=!isHub?'flex':'none';
-  const regLabel=document.getElementById('tab-reg-label');
-  if(regLabel) regLabel.textContent=isHub?'Reg':'Reg';
+  // Marshals have no Reg tab
+  const regTab=document.getElementById('tab-reg');
+  if(regTab) regTab.style.display=isHub?'flex':'none';
+  // Runners panel: hub gets Add/Reset + CSV; marshals get read-only notice
+  const hubBtns=document.getElementById('runners-hub-btns');
+  if(hubBtns) hubBtns.style.display=isHub?'flex':'none';
+  const csvUpload=document.getElementById('runners-csv-upload');
+  if(csvUpload) csvUpload.style.display=isHub?'':'none';
+  const marshalNotice=document.getElementById('runners-marshal-notice');
+  if(marshalNotice) marshalNotice.style.display=isHub?'none':'block';
   updateSetupPanel();
   if(raceCode&&!supaReady&&navigator.onLine) initSupabase();
 }
@@ -2941,9 +2951,6 @@ function updateSetupPanel(){
     runnerStatus.textContent=n?`${n} participant${n!==1?'s':''} loaded`:'No runners loaded.';
   }
   if(runnerWarn) runnerWarn.style.display=runners.length?'none':'block';
-  // Preflight card: only useful on non-hub devices (pre-race admin device)
-  const preflightCard=document.getElementById('preflight-push-card');
-  if(preflightCard) preflightCard.style.display=isHub?'none':'block';
 }
 
 function openSetupQRScan(){
