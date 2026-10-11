@@ -2676,12 +2676,33 @@ function renderStationsPanel(){
               <button onclick="cancelRenameStation(${i})" style="font-size:.68rem;padding:3px 8px;background:var(--surf2);color:var(--mut);border:1px solid var(--bdr);border-radius:4px;cursor:pointer;">Cancel</button>
             </div>
           </div>
-          <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:var(--mut);">${code}</div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
+            <div id="station-slug-display-${i}" style="font-size:.65rem;font-family:'DM Mono',monospace;color:var(--mut);cursor:pointer;" onclick="startRenameSlug(${i})" title="Tap to set custom code">${code} <span style="font-size:.55rem;">✎</span></div>
+            <div id="station-slug-edit-${i}" style="display:none;flex:1;">
+              <div style="display:flex;align-items:center;gap:4px;">
+                <span style="font-size:.62rem;font-family:'DM Mono',monospace;color:var(--mut);">${raceCode}-</span>
+                <input id="station-slug-input-${i}" value="${esc(s.slug)}" maxlength="8" style="font-size:.68rem;font-family:'DM Mono',monospace;font-weight:700;border:1px solid var(--tel);border-radius:4px;padding:2px 5px;width:80px;background:var(--bg);color:var(--txt);text-transform:uppercase;"
+                  oninput="this.value=this.value.replace(/[^A-Za-z0-9]/g,'').toUpperCase()"
+                  onkeydown="if(event.key==='Enter')commitRenameSlug(${i});if(event.key==='Escape')cancelRenameSlug(${i})">
+                <button onclick="commitRenameSlug(${i})" style="font-size:.62rem;padding:2px 6px;background:var(--tel);color:#fff;border:none;border-radius:4px;cursor:pointer;">✓</button>
+                <button onclick="cancelRenameSlug(${i})" style="font-size:.62rem;padding:2px 5px;background:var(--surf2);color:var(--mut);border:1px solid var(--bdr);border-radius:4px;cursor:pointer;">✕</button>
+              </div>
+              <div id="station-slug-err-${i}" style="font-size:.6rem;color:#b02020;margin-top:2px;"></div>
+            </div>
+          </div>
         </div>
         <div style="display:flex;gap:5px;flex-shrink:0;align-items:flex-start;">
           <button onclick="showStationQR(${i},'panel')" class="btn" style="padding:5px 10px;font-size:.68rem;background:#1a4a8a;color:#fff;border:none;">QR</button>
           <button onclick="openImportForStation(${i})" class="btn acc" style="padding:5px 10px;font-size:.68rem;">📥 Import</button>
+          <button onclick="confirmKickStation(${i})" style="padding:5px 8px;font-size:.68rem;background:none;border:1px solid #b06000;color:#b06000;border-radius:5px;cursor:pointer;" title="Force disconnect this timing point">⏏</button>
           <button onclick="confirmRemoveStation(${i})" style="padding:5px 8px;font-size:.72rem;background:none;border:1px solid #c04040;color:#c04040;border-radius:5px;cursor:pointer;" title="Remove station">✕</button>
+        </div>
+      </div>
+      <div id="station-kick-confirm-${i}" style="display:none;background:#fff4e5;border:1px solid #b06000;border-radius:6px;padding:8px;margin-top:6px;">
+        <div style="font-size:.72rem;color:#7a4000;margin-bottom:6px;">⏏ Force-disconnect <strong>${esc(s.name)}</strong>? This removes it from the network — the device can rejoin by rescanning its QR code.</div>
+        <div style="display:flex;gap:6px;">
+          <button onclick="cancelKickStation(${i})" style="flex:1;font-size:.7rem;padding:5px;background:var(--surf2);border:1px solid var(--bdr);border-radius:4px;cursor:pointer;">Cancel</button>
+          <button onclick="kickStation(${i})" style="flex:1;font-size:.7rem;padding:5px;background:#b06000;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700;">Disconnect</button>
         </div>
       </div>
       <div id="station-delete-confirm-${i}" style="display:none;background:#fdeaea;border:1px solid #c04040;border-radius:6px;padding:8px;margin-top:6px;">
@@ -2723,6 +2744,73 @@ function confirmRemoveStation(i){
 }
 function cancelRemoveStation(i){
   document.getElementById('station-delete-confirm-'+i).style.display='none';
+}
+
+// ── Slug rename ──────────────────────────────────────────────────────────────
+function startRenameSlug(i){
+  document.getElementById('station-slug-display-'+i).style.display='none';
+  document.getElementById('station-slug-edit-'+i).style.display='';
+  const inp=document.getElementById('station-slug-input-'+i);
+  if(inp){ inp.focus(); inp.select(); }
+}
+function cancelRenameSlug(i){
+  document.getElementById('station-slug-display-'+i).style.display='';
+  document.getElementById('station-slug-edit-'+i).style.display='none';
+  const err=document.getElementById('station-slug-err-'+i);
+  if(err) err.textContent='';
+}
+function commitRenameSlug(i){
+  const inp=document.getElementById('station-slug-input-'+i);
+  const err=document.getElementById('station-slug-err-'+i);
+  const newSlug=(inp?.value||'').replace(/[^A-Za-z0-9]/g,'').toUpperCase().slice(0,8);
+  if(!newSlug){ if(err) err.textContent='Code cannot be empty.'; return; }
+  // Check uniqueness
+  const taken=_adminStations.some((s,j)=>j!==i&&s.slug===newSlug);
+  if(taken){ if(err) err.textContent=`"${newSlug}" is already used by another station.`; return; }
+  if(_adminStations[i]){
+    const oldSlug=_adminStations[i].slug;
+    _adminStations[i].slug=newSlug;
+    // Update import records if any
+    if(_marshalImports[oldSlug]){ _marshalImports[newSlug]=_marshalImports[oldSlug]; delete _marshalImports[oldSlug]; }
+    saveStations();
+    renderStationsPanel();
+    toast(`✏ Station code changed to ${newSlug}`,'g');
+  }
+}
+
+// ── Force disconnect (kick) ───────────────────────────────────────────────────
+function confirmKickStation(i){
+  // Close any other open confirms first
+  _adminStations.forEach((_,j)=>{
+    if(j!==i){
+      const el=document.getElementById('station-kick-confirm-'+j);
+      if(el) el.style.display='none';
+    }
+  });
+  document.getElementById('station-kick-confirm-'+i).style.display='block';
+}
+function cancelKickStation(i){
+  document.getElementById('station-kick-confirm-'+i).style.display='none';
+}
+async function kickStation(i){
+  const s=_adminStations[i];
+  if(!s) return;
+  document.getElementById('station-kick-confirm-'+i).style.display='none';
+  if(!supa||!raceCode){
+    toast('Not connected to Supabase — can only kick when online','r'); return;
+  }
+  try{
+    // Delete the timing_point row for devices using this station name
+    const {error}=await supa.from('timing_points')
+      .delete()
+      .eq('race_code',raceCode)
+      .eq('point_name',s.name);
+    if(error) throw error;
+    toast(`⏏ ${s.name} disconnected from network`,'y');
+    renderStationsPanel();
+  }catch(e){
+    toast(`Failed to disconnect: ${e.message}`,'r');
+  }
 }
 
 function openImportForStation(i){
