@@ -1017,7 +1017,10 @@ tbody tr.rdata:active{background:#f0f0ea;}
     </div>
 
     <!-- Connected timing points -->
-    <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:6px;">Connected Timing Points</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);">Connected Timing Points</div>
+      <button id="clear-stale-btn" onclick="clearStalePoints()" style="display:none;font-size:.62rem;padding:3px 8px;background:none;border:1px solid #b06000;color:#b06000;border-radius:4px;cursor:pointer;">⏏ Clear stale</button>
+    </div>
     <div id="net-points-list" style="display:flex;flex-direction:column;gap:5px;margin-bottom:12px;">
       <div style="font-size:.75rem;color:var(--mut2);font-style:italic;">Loading…</div>
     </div>
@@ -4556,22 +4559,32 @@ function openSyncModal(){
 
 async function loadConnectedPoints(){
   const el = document.getElementById('net-points-list');
+  const staleBtn = document.getElementById('clear-stale-btn');
   if(!supa||!raceCode){ el.innerHTML='<div style="font-size:.75rem;color:var(--mut2);font-style:italic;">Not connected to a race</div>'; return; }
   try {
     const {data,error} = await supa.from('timing_points').select('*').eq('race_code',raceCode).order('last_seen',{ascending:false});
     if(error) throw error;
     if(!data||!data.length){ el.innerHTML='<div style="font-size:.75rem;color:var(--mut2);font-style:italic;">No devices seen yet</div>'; return; }
+    const hasStale = data.some(p=>{
+      const ago=Math.floor((Date.now()-new Date(p.last_seen).getTime())/60000);
+      return ago>=10 && p.device_id!==deviceId;
+    });
+    if(staleBtn) staleBtn.style.display=isHub&&hasStale?'':'none';
     el.innerHTML = data.map(p=>{
       const ago = Math.floor((Date.now()-new Date(p.last_seen).getTime())/60000);
       const agoTxt = ago < 1 ? 'Just now' : ago < 60 ? `${ago}m ago` : `${Math.floor(ago/60)}h ago`;
       const isMe = p.device_id === deviceId;
       const statusCol = ago < 5 ? '#1a7a3a' : ago < 30 ? '#9a7000' : '#b02020';
+      const kickBtn = isHub && !isMe
+        ? `<button onclick="kickDeviceById('${p.device_id}','${esc(p.point_name)}')" title="Force disconnect" style="flex-shrink:0;font-size:.65rem;padding:3px 7px;background:none;border:1px solid #b06000;color:#b06000;border-radius:4px;cursor:pointer;">⏏</button>`
+        : '';
       return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:${isMe?'#ddf0ee':'#fff'};border:1px solid ${isMe?'#006b5e':'var(--bdr)'};border-radius:5px;">
         <div style="width:8px;height:8px;border-radius:50%;background:${statusCol};flex-shrink:0;"></div>
         <div style="flex:1;min-width:0;">
           <div style="font-size:.78rem;font-weight:600;">${esc(p.point_name)}${isMe?' <span style=\"font-size:.6rem;color:#006b5e;\">(this device)</span>':''}${p.is_hub?' 🖥':''}</div>
           <div style="font-size:.62rem;color:var(--mut);">${agoTxt} · ID: ${p.device_id.slice(-6)}</div>
         </div>
+        ${kickBtn}
       </div>`;
     }).join('');
     // Update last_seen for this device
@@ -4579,6 +4592,33 @@ async function loadConnectedPoints(){
   } catch(e) {
     el.innerHTML=`<div style="font-size:.75rem;color:#b02020;">Error loading points: ${e.message}</div>`;
   }
+}
+
+async function kickDeviceById(targetDeviceId, pointName){
+  if(!supa||!raceCode) return;
+  if(!confirm(`Disconnect "${pointName}" (ID: …${targetDeviceId.slice(-6)})?`)) return;
+  try{
+    const {error}=await supa.from('timing_points').delete().eq('race_code',raceCode).eq('device_id',targetDeviceId);
+    if(error) throw error;
+    toast(`⏏ ${pointName} disconnected`,'y');
+    loadConnectedPoints();
+  }catch(e){ toast(`Failed: ${e.message}`,'r'); }
+}
+
+async function clearStalePoints(){
+  if(!supa||!raceCode) return;
+  if(!confirm('Remove all timing points that have been offline for 10+ minutes?')) return;
+  try{
+    const cutoff=new Date(Date.now()-10*60*1000).toISOString();
+    const {error}=await supa.from('timing_points')
+      .delete()
+      .eq('race_code',raceCode)
+      .neq('device_id',deviceId)
+      .lt('last_seen',cutoff);
+    if(error) throw error;
+    toast('⏏ Stale points cleared','y');
+    loadConnectedPoints();
+  }catch(e){ toast(`Failed: ${e.message}`,'r'); }
 }
 
 async function supaRefreshCache(){
