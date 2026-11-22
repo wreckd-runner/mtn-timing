@@ -16,7 +16,7 @@
 <script>
 // ── PWA Service Worker ─────────────────────────────────────────────────────
 // Single cache name — used by SW and the manual pre-cache below
-const MTN_CACHE = 'mtn-v9';
+const MTN_CACHE = 'mtn-v10';
 const MTN_CDN = [
   'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
@@ -25,7 +25,7 @@ const MTN_CDN = [
 
 if('serviceWorker' in navigator){
   const swCode = `
-const CACHE = 'mtn-v9';
+const CACHE = 'mtn-v10';
 const CDN = [
   'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
@@ -575,7 +575,7 @@ tbody tr.rdata:active{background:#f0f0ea;}
         <span class="subhead">Mountain Time Node</span>
       </div>
     </div>
-    <span id="supa-status" style="font-size:.6rem;font-family:'DM Mono',monospace;color:var(--mut);display:none;" onclick="raceCode&&supaPullRaceData()"></span>
+    <span id="supa-status" style="font-size:.6rem;font-family:'DM Mono',monospace;color:var(--mut);display:none;cursor:pointer;" onclick="if(raceCode){if(!supa||!supaReady){initSupabase();toast('↻ Reconnecting…','b');}else{supaPullRaceData();toast('↻ Pulling…','b');}}" title="Tap to reconnect or pull latest data"></span>
     <span class="clk" id="clock">--:--:--</span>
   </div>
 
@@ -3435,6 +3435,7 @@ async function completeAdminSetup(){
           saveStations();
           const raceNameToUse=existingRaceName;
           localStorage.setItem('mtn_stations_v1',JSON.stringify(_adminStations));
+          _hubRejoin=true; // tell enforceOneHub to retire any old hub row instead of blocking
           _finishSetup({race:raceNameToUse, point:'Hub', newCode:code, hub:true});
           setTimeout(publishStationListToSupa, 1500);
           return;
@@ -4742,6 +4743,8 @@ function supaDeleteNotify(uid_){
 
 // ═══════════════ SUPABASE ENGINE ═══════════════
 
+let _hubRejoin=false; // set true when user explicitly chose Rejoin — skip conflict check
+
 async function enforceOneHub(){
   if(!supa||!raceCode||!isHub) return;
   try{
@@ -4753,24 +4756,31 @@ async function enforceOneHub(){
     if(data&&data.length){
       const other=data[0];
       const ago=Math.floor((Date.now()-new Date(other.last_seen).getTime())/60000);
-      if(ago<30){
-        // Active hub already exists — demote self to marshal
+      if(ago<30&&!_hubRejoin){
+        // Active hub already exists AND this isn't an explicit rejoin — demote self to marshal
         isHub=false;
         const p=JSON.parse(localStorage.getItem(SK_P)||'{}');
         p.isHub=false; localStorage.setItem(SK_P,JSON.stringify(p));
         updateHdrPoint();
         const badge=document.getElementById('hdr-hub-badge');
         if(badge) badge.style.display='none';
-        toast(`⚠️ Hub already active (${other.point_name}). Switched to Marshal.`,'r');
+        toast(`⚠️ Hub already active on another device. Switched to Marshal mode.`,'r');
         await supa.from('timing_points').upsert({
           race_code:raceCode,device_id:deviceId,point_name:timingPoint,
           is_hub:false,last_seen:new Date().toISOString()
         },{onConflict:'race_code,device_id'});
-        // As marshal, show offline check after pull
         setTimeout(checkMarshalOfflineReady,4000);
         return;
       }
+      if(_hubRejoin){
+        // Explicit rejoin — retire the old hub row so there's only one
+        await supa.from('timing_points')
+          .update({is_hub:false, point_name:'__retired__', last_seen:new Date().toISOString()})
+          .eq('race_code',raceCode).eq('device_id',other.device_id);
+        toast(`🔄 Retired old hub session — taking over as Hub`,'b');
+      }
     }
+    _hubRejoin=false; // consume the flag
     await supaRegisterPoint();
   }catch(e){console.warn('enforceOneHub:',e);}
 }
@@ -5203,9 +5213,11 @@ async function supaPullRaceData(){
       }
     });
     if(poolAdded){ entries.sort((a,b)=>(a.timestamp||0)-(b.timestamp||0)); saveE(true); }
-    if(poolAdded||remoteAdded){ renderRunners(); renderReg(); renderResults(); }
+    if(poolAdded||remoteAdded){ renderRunners(); renderReg(); renderResults(); if(isHub) renderHubResults(); }
     if(poolAdded) toast(`👥 ${poolAdded} entr${poolAdded===1?'y':'ies'} pulled from station pool`,'b');
   }
+  // Always refresh hub results after a full pull (runners + entries now complete)
+  if(isHub) renderHubResults();
 }
 
 
