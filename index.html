@@ -728,6 +728,11 @@ tbody tr.rdata:active{background:#f0f0ea;}
         </div>
       </div>
 
+      <!-- No finish station warning -->
+      <div id="hub-no-finish-warn" style="display:none;background:#fff3cd;border-bottom:1px solid #d4aa60;padding:8px 14px;font-size:.72rem;color:#7a4000;flex-direction:row;align-items:center;gap:8px;">
+        <span>⚠️ No 🏁 finish station set — go to the <strong>Stations</strong> tab and mark one as the finish line. Finished count won't work until this is done.</span>
+      </div>
+
       <!-- Hub live splits banner -->
       <div id="hub-splits-banner" style="display:none;background:#e8f4ff;border-bottom:1px solid #aac4e8;padding:8px 14px;font-size:.7rem;color:#1a4a8a;flex-direction:column;gap:4px;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
@@ -2409,14 +2414,15 @@ function renderHubResults(){
   const displayStations=hubStationFilter==='all'?allStations:[hubStationFilter].filter(s=>byStation[s]);
 
   // Compute stats
-  // finishedAtFinishLine = bibs recorded at the designated finish station only.
-  // If no finish station is set, all own entries count (single-point race).
+  // finishedAtFinishLine = bibs recorded at the designated 🏁 finish station ONLY.
+  // If no finish station is marked, nothing counts as finished — hub operator must designate one.
   const finishStationName=_adminStations.find(s=>s.isFinish)?.name||null;
   const finishedAtFinishLine=new Set();
-  allFinish.forEach(e=>{
-    const dev=e.device||timingPoint;
-    if(!finishStationName||dev===finishStationName) finishedAtFinishLine.add(baseBib(e.bib));
-  });
+  if(finishStationName){
+    allFinish.forEach(e=>{
+      if((e.device||'')===finishStationName) finishedAtFinishLine.add(baseBib(e.bib));
+    });
+  }
   // Finished = recorded at finish line and not DNS (DNF runners who crossed still count as finished)
   const totalFinished=runners.length
     ? runners.filter(r=>r.status!=='DNS'&&finishedAtFinishLine.has(baseBib(r.bib))).length
@@ -2430,9 +2436,13 @@ function renderHubResults(){
     : [];
   const flagCount=allFinish.filter(e=>e.hasFlag).length;
 
+  // Warn if no finish station is designated
+  const noFinishWarn=document.getElementById('hub-no-finish-warn');
+  if(noFinishWarn) noFinishWarn.style.display=finishStationName?'none':'flex';
+
   const setT=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
-  setT('hs-tot', totalFinished);
-  setT('hs-out', stillOut.length);
+  setT('hs-tot', finishStationName ? totalFinished : '—');
+  setT('hs-out', finishStationName ? stillOut.length : '—');
   setT('hs-dnf', dnfCount);
   setT('hs-dns', dnsCount);
   setT('hs-flag', flagCount);
@@ -3501,15 +3511,27 @@ async function doHubRejoin(){
   if(btn){ btn.disabled=true; btn.textContent='⏳ Looking up…'; }
   if(errEl) errEl.textContent='';
   try{
+    // Make sure we have a Supabase client — init with temp code if needed
+    if(!supa){ const prevCode=raceCode; raceCode=code; initSupabase(); await new Promise(r=>setTimeout(r,800)); raceCode=prevCode; }
     const sbv=supa||(window.supabase?.createClient?.(SUPA_URL,SUPA_KEY));
     if(!sbv){ if(errEl) errEl.textContent='No network connection.'; if(btn){btn.disabled=false;btn.textContent='🔄 Find & Reconnect';} return; }
-    // Look up the manifest
-    const {data:manifest}=await sbv.from('timing_points')
-      .select('meta').eq('race_code',code).eq('device_id','hub-stations-manifest').single();
-    if(!manifest?.meta){ if(errEl) errEl.textContent=`No hub found for race ${code}. Check the code.`; if(btn){btn.disabled=false;btn.textContent='🔄 Find & Reconnect';} return; }
+
+    // 1. Try stations manifest first
     let storedStations=[];
-    try{ storedStations=JSON.parse(manifest.meta); }catch(e){}
+    const {data:manifest}=await sbv.from('timing_points')
+      .select('meta').eq('race_code',code).eq('device_id','hub-stations-manifest').maybeSingle();
+    if(manifest?.meta){ try{ storedStations=JSON.parse(manifest.meta); }catch(e){} }
+
+    // 2. Try races table for race name — this is always written by supaRegisterPoint
     const {data:raceRow}=await sbv.from('races').select('name').eq('race_code',code).maybeSingle();
+
+    // 3. If neither manifest nor races row found — no hub for this code
+    if(!manifest&&!raceRow){
+      if(errEl) errEl.textContent=`No race found for code ${code}. Check the code and try again.`;
+      if(btn){btn.disabled=false;btn.textContent='🔄 Find & Reconnect';}
+      return;
+    }
+
     const raceName_=(raceRow?.name)||code;
     // Remove the prompt, show the rejoin dialog
     document.getElementById('hub-rejoin-prompt').remove();
@@ -3522,7 +3544,7 @@ async function doHubRejoin(){
       _finishSetup({race:raceName_, point:'Hub', newCode:code, hub:true});
       setTimeout(publishStationListToSupa,1500);
     }
-    // 'fresh' or 'cancel' — do nothing, setup screen still showing
+    // 'fresh' or 'cancel' — setup screen stays visible
   }catch(e){
     console.warn('doHubRejoin failed',e);
     if(errEl) errEl.textContent='Error connecting — check your network and try again.';
