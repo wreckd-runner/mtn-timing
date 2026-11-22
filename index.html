@@ -16,7 +16,7 @@
 <script>
 // ── PWA Service Worker ─────────────────────────────────────────────────────
 // Single cache name — used by SW and the manual pre-cache below
-const MTN_CACHE = 'mtn-v7';
+const MTN_CACHE = 'mtn-v9';
 const MTN_CDN = [
   'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
@@ -25,7 +25,7 @@ const MTN_CDN = [
 
 if('serviceWorker' in navigator){
   const swCode = `
-const CACHE = 'mtn-v7';
+const CACHE = 'mtn-v9';
 const CDN = [
   'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
@@ -555,23 +555,6 @@ tbody tr.rdata:active{background:#f0f0ea;}
         <div id="admin-stations-list" style="display:flex;flex-direction:column;gap:8px;">
           <!-- Populated dynamically -->
         </div>
-      </div>
-
-      <!-- Hub itself is Start/Finish -->
-      <div style="background:#e8f4ff;border:1px solid #2a6aaa;border-radius:8px;padding:12px;margin-bottom:14px;">
-        <div style="font-size:.78rem;font-weight:700;color:#1a4a8a;margin-bottom:4px;">🖥 Hub = Start / Finish Line</div>
-        <div style="font-size:.68rem;color:#2a4a7a;">The hub device controls the start list and records start/finish times directly. Choose your hub timing role:</div>
-        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
-          <button class="chip" id="hub-role-finish" onclick="setHubRole('Finish Line')" style="border-color:#2a6aaa;color:#1a4a8a;">🏁 Finish Line</button>
-          <button class="chip" id="hub-role-start" onclick="setHubRole('Start')" style="border-color:#2a6aaa;color:#1a4a8a;">🚦 Start</button>
-          <button class="chip" id="hub-role-both" onclick="setHubRole('Start / Finish')" style="border-color:#2a6aaa;color:#1a4a8a;">🔁 Start + Finish</button>
-          <button class="chip" id="hub-role-reg" onclick="setHubRole('Registration')" style="border-color:#2a6aaa;color:#1a4a8a;">📋 Registration</button>
-        </div>
-        <div style="margin-top:8px;">
-          <input class="fld" type="text" id="admin-hub-role-custom" placeholder="or type a custom role…" maxlength="40"
-            style="font-size:.82rem;" oninput="clearHubRoleChips()">
-        </div>
-        <input type="hidden" id="admin-hub-role" value="Finish Line">
       </div>
 
       <button class="rbtn" onclick="completeAdminSetup()" style="font-size:1rem;letter-spacing:1px;padding:14px;width:100%;">Launch Hub →</button>
@@ -2123,6 +2106,7 @@ function renderResults(){
       const allBadges=[];
       if(entryIsTeam) allBadges.push({cls:'b-team',txt:'👥 Team'});
       if(e.hasFlag) allBadges.push({cls:'b-rev',txt:'⚠ Review'});
+      if(e._pooledFrom) allBadges.push({cls:'b-log',txt:`📡 …${e._pooledFrom}`});
       (e.tags||[]).forEach(t=>allBadges.push({cls:'b-tag',txt:t}));
       // Show first badge truncated + "+N" overflow pill
       let bd='';
@@ -2423,26 +2407,22 @@ function renderHubResults(){
   const displayStations=hubStationFilter==='all'?allStations:[hubStationFilter].filter(s=>byStation[s]);
 
   // Compute stats
-  const finishedBibs=new Set(allFinish.map(e=>e.bib));
+  // finishedAtFinishLine = bibs recorded at the designated finish station only.
+  // If no finish station is set, all own entries count (single-point race).
+  const finishStationName=_adminStations.find(s=>s.isFinish)?.name||null;
+  const finishedAtFinishLine=new Set();
+  allFinish.forEach(e=>{
+    const dev=e.device||timingPoint;
+    if(!finishStationName||dev===finishStationName) finishedAtFinishLine.add(baseBib(e.bib));
+  });
+  // Finished = recorded at finish line and not DNS (DNF runners who crossed still count as finished)
   const totalFinished=runners.length
-    ? runners.filter(r=>r.status!=='DNS'&&r.status!=='DNF'&&finishedBibs.has(r.bib)).length
-    : allFinish.length;
+    ? runners.filter(r=>r.status!=='DNS'&&finishedAtFinishLine.has(baseBib(r.bib))).length
+    : finishedAtFinishLine.size;
   const dnfCount=runners.filter(r=>r.status==='DNF').length;
   const dnsCount=runners.filter(r=>r.status==='DNS').length;
-  // "Still Out" = started (not DNS), no finish recorded at the finish line,
-  // and not confirmed DNF by the hub. A marshal's local DNF tag is advisory —
-  // the runner may have been timed at that point but could still be moving.
-  // We include DNF runners who have an aid-station split but no finish, so they
-  // remain visible on the hub's field view rather than silently disappearing.
-  const finishStationSlug=_adminStations.find(s=>s.isFinish)?.slug||null;
-  const finishedAtFinishLine=new Set(
-    Object.values(window._remoteSplits||{})
-      .concat(entries.filter(e=>e.type==='finish'))
-      .filter(e=>!finishStationSlug||(e.device||timingPoint)===(_adminStations.find(s=>s.isFinish)?.name||timingPoint))
-      .map(e=>baseBib(e.bib))
-  );
-  // Also include own entries at the finish timing point
-  entries.filter(e=>e.type==='finish').forEach(e=>finishedAtFinishLine.add(baseBib(e.bib)));
+  // "Still Out" = not DNS and not yet recorded at the finish line.
+  // Includes runners marked DNF by an aid station — that's advisory until hub confirms.
   const stillOut=runners.length
     ? runners.filter(r=>r.status!=='DNS'&&!finishedAtFinishLine.has(baseBib(r.bib)))
     : [];
@@ -2739,7 +2719,7 @@ function unlinkRunnerTeam(){
 // Marshal station data managed by admin
 // _adminStations: [{name, slug}]  slug = short unique code e.g. "KM10"
 let _adminStations = [];
-let _hubRole = 'Finish Line';
+// Hub has no role — purely administrative/registration
 // _marshalImports: {[slug]: {stationName, importedAt, entryCount, device}}
 let _marshalImports = {};
 // Currently selected station for import
@@ -2896,13 +2876,22 @@ async function completeMarshalSetup(){
         const {data:pts}=await sb.from('timing_points').select('device_id,point_name,is_hub,last_seen')
           .eq('race_code',newCode).eq('point_name',point);
         if(pts&&pts.length){
-          const conflict=pts.find(p=>p.device_id!==deviceId);
-          if(conflict){
-            const ago=Math.floor((Date.now()-new Date(conflict.last_seen).getTime())/60000);
+          // Multiple devices sharing the same station name = pooled timing (allowed).
+          // Only block if another device is using this name AND it's a hub (hub conflict).
+          const hubConflict=pts.find(p=>p.device_id!==deviceId&&p.is_hub);
+          if(hubConflict){
+            const ago=Math.floor((Date.now()-new Date(hubConflict.last_seen).getTime())/60000);
             if(ago<20){
-              err.textContent=`⚠ Station "${point}" is already active on another device (last seen ${ago}m ago). Use a different station name, or wait 20 minutes for it to expire.`;
-              return;
+              err.textContent=`⚠ A Hub is already active with this race code. This device will join as a timing point.`;
+              // Don't return — allow through as a marshal
             }
+          }
+          // Count how many OTHER devices are already at this station
+          const poolPeers=pts.filter(p=>p.device_id!==deviceId&&!p.is_hub);
+          if(poolPeers.length>0){
+            // Joining a pooled station — no block, just inform
+            err.textContent=`ℹ ${poolPeers.length} other device${poolPeers.length>1?'s':''} already timing at "${point}" — entries will be shared and deduplicated.`;
+            setTimeout(()=>{ if(err) err.textContent=''; },3000);
           }
         }
         err.textContent='';
@@ -2914,22 +2903,7 @@ async function completeMarshalSetup(){
 }
 
 // ── Admin / Hub flow ──────────────────────────────────────────────────────
-function setHubRole(role){
-  _hubRole=role;
-  document.getElementById('admin-hub-role').value=role;
-  document.getElementById('admin-hub-role-custom').value='';
-  ['finish','start','both','reg'].forEach(k=>{
-    const el=document.getElementById('hub-role-'+k);
-    if(el) el.style.fontWeight=el.textContent.includes(role.split(' ')[0])?'700':'400';
-  });
-}
-function clearHubRoleChips(){
-  _hubRole=document.getElementById('admin-hub-role-custom').value.trim()||'Finish Line';
-  ['finish','start','both','reg'].forEach(k=>{
-    const el=document.getElementById('hub-role-'+k);
-    if(el) el.style.fontWeight='400';
-  });
-}
+// Hub role picker removed — hub is purely administrative/registration
 
 function addMarshalStation(fromPanel){
   const code=document.getElementById('setup-code')?.value.trim().toUpperCase()||raceCode;
@@ -3420,19 +3394,100 @@ function showStationResults(slug){
   modal.style.display='flex';
 }
 
-function completeAdminSetup(){
+async function completeAdminSetup(){
   const err=document.getElementById('setup-admin-err');
   err.textContent='';
   const race=(document.getElementById('admin-race-name')?.value||'').trim();
   const code=document.getElementById('setup-code').value.trim().toUpperCase();
-  const customRole=(document.getElementById('admin-hub-role-custom')?.value||'').trim();
-  const point=customRole||document.getElementById('admin-hub-role').value||'Finish Line';
-  if(!race){err.textContent='Enter the race name.';return;}
   if(!code){err.textContent='Generate or enter a race code.';return;}
+
+  // ── Rejoin check: does a hub-stations-manifest already exist for this code? ──
+  // This handles the case where the hub's cache was cleared mid-race.
+  try{
+    // Temporarily set raceCode so initSupabase can connect
+    const prevCode=raceCode; raceCode=code;
+    initSupabase(); // ensure supa is ready
+    await new Promise(r=>setTimeout(r,700)); // brief settle for client init
+    const sbv=supa||(window.supabase?.createClient?.(SUPA_URL,SUPA_KEY));
+    if(!sbv){ raceCode=prevCode; }
+    if(sbv){
+      const {data:manifest}=await sbv.from('timing_points')
+        .select('meta,point_name,last_seen')
+        .eq('race_code',code)
+        .eq('device_id','hub-stations-manifest')
+        .single();
+      if(manifest&&manifest.meta){
+        // Existing race found — offer rejoin
+        let storedStations=[];
+        try{ storedStations=JSON.parse(manifest.meta); }catch(e){}
+        // Also try to get race name from races table
+        const {data:raceRow}=await sbv.from('races')
+          .select('name')
+          .eq('race_code',code)
+          .maybeSingle();
+        const existingRaceName=(raceRow?.name)||race||'Race';
+        // Show rejoin confirmation
+        const confirmed=await showRejoinDialog(code, existingRaceName, storedStations);
+        if(confirmed==='rejoin'){
+          // Restore configuration from Supabase
+          _adminStations=storedStations.map((s,i)=>({name:s.name,slug:s.slug,isFinish:!!s.isFinish,order:i}));
+          saveStations();
+          const raceNameToUse=existingRaceName;
+          localStorage.setItem('mtn_stations_v1',JSON.stringify(_adminStations));
+          _finishSetup({race:raceNameToUse, point:'Hub', newCode:code, hub:true});
+          setTimeout(publishStationListToSupa, 1500);
+          return;
+        } else if(confirmed==='cancel'){
+          return; // user cancelled
+        }
+        // confirmed==='fresh' — fall through to normal launch (new setup)
+      }
+    }
+  }catch(e){ console.warn('rejoin check failed',e); }
+
+  if(!race){err.textContent='Enter the race name.';return;}
   // Save station list to localStorage so hub can reference it
   localStorage.setItem('mtn_stations_v1',JSON.stringify(_adminStations));
-  _finishSetup({race, point, newCode:code, hub:true});
+  _finishSetup({race, point:'Hub', newCode:code, hub:true});
   setTimeout(publishStationListToSupa, 1500);
+}
+
+function showRejoinDialog(code, raceName, stations){
+  return new Promise(resolve=>{
+    const existing=document.getElementById('rejoin-dialog');
+    if(existing) existing.remove();
+    const stList=stations.map(s=>`<li style="margin:2px 0;">${s.isFinish?'🏁 ':'📍 '}${s.name}${s.slug?' <span style="color:var(--mut);font-size:.7em;">(${s.slug})</span>':''}</li>`).join('');
+    const d=document.createElement('div');
+    d.id='rejoin-dialog';
+    d.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+    d.innerHTML=`
+      <div style="background:#fff;border-radius:12px;padding:20px;max-width:380px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.3);">
+        <div style="font-size:1rem;font-weight:700;color:#1a4a8a;margin-bottom:6px;">🔄 Existing Race Found</div>
+        <div style="font-size:.78rem;color:#333;margin-bottom:10px;">Race code <strong>${code}</strong> already has a hub setup:</div>
+        <div style="background:#f4f8ff;border:1px solid #c0d4f0;border-radius:6px;padding:10px;margin-bottom:12px;font-size:.76rem;">
+          <div style="font-weight:700;margin-bottom:4px;">📋 ${raceName}</div>
+          <div style="color:var(--mut);margin-bottom:4px;">${stations.length} station${stations.length!==1?'s':''} configured:</div>
+          <ul style="margin:0;padding-left:16px;color:#333;">${stList||'<li>No stations found</li>'}</ul>
+        </div>
+        <div style="font-size:.72rem;color:#555;margin-bottom:14px;">Did your cache clear or did you lose your session? Rejoining will restore your race setup from the cloud — no data lost.</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <button onclick="document.getElementById('rejoin-dialog').remove();window._rejoinResolve('rejoin');"
+            style="background:#1a7a3a;color:#fff;border:none;border-radius:8px;padding:12px;font-size:.85rem;font-weight:700;cursor:pointer;">
+            🔄 Rejoin — restore existing race
+          </button>
+          <button onclick="document.getElementById('rejoin-dialog').remove();window._rejoinResolve('fresh');"
+            style="background:#8a3000;color:#fff;border:none;border-radius:8px;padding:10px;font-size:.8rem;cursor:pointer;">
+            ⚠️ Start Fresh — overwrite existing setup
+          </button>
+          <button onclick="document.getElementById('rejoin-dialog').remove();window._rejoinResolve('cancel');"
+            style="background:#eee;color:#333;border:none;border-radius:8px;padding:10px;font-size:.8rem;cursor:pointer;">
+            Cancel
+          </button>
+        </div>
+      </div>`;
+    window._rejoinResolve=resolve;
+    document.body.appendChild(d);
+  });
 }
 
 // ── Shared setup completion ───────────────────────────────────────────────
@@ -3473,8 +3528,8 @@ function _finishSetup({race,point,newCode,hub,onlineMarshal}){
   updateHdrPoint();
   // Hub defaults to Results (splits view); marshals default to Entry (timing)
   if(isHub) go('results');
-  const modeLabel=isHub?'Hub — registration & splits view':(marshalOnline?'Online timing point':'Offline timing point');
-  toast(`✅ ${timingPoint} — ${modeLabel} ready`,'g');
+  const modeLabel=isHub?'Hub — registration & results':(marshalOnline?'Online timing point':'Offline timing point');
+  toast(`✅ ${isHub?'Hub':timingPoint} — ${modeLabel} ready`,'g');
 }
 
 // Keep for backward compat (called from old hub toggle path)
@@ -3498,7 +3553,9 @@ function clearSessionData(){
 
 function updateHdrPoint(){
   document.getElementById('hdr-race-name').textContent=raceName||'MTN';
-  document.getElementById('hdr-point-name').textContent=timingPoint||'—';
+  // Hub has no role — show nothing in the point name slot
+  const pointEl=document.getElementById('hdr-point-name');
+  if(pointEl) pointEl.textContent=isHub?'':(timingPoint||'—');
   const hubBadge=document.getElementById('hdr-hub-badge');
   if(hubBadge) hubBadge.style.display=isHub?'inline':'none';
   const supaEl=document.getElementById('supa-status');
@@ -4801,6 +4858,12 @@ function supaSubscribe(){
         payload=>{ onRemoteEntry(payload.new); })
       .on('postgres_changes',{event:'DELETE',schema:'public',table:'entries',filter:'race_code=eq.'+raceCode},
         payload=>{ supaDeleteNotify(payload.old?.uid); });
+  } else if(marshalOnline){
+    // Pooled station: marshals subscribe to entries from their own station only.
+    // This lets multiple devices at the same station see each other's entries in realtime.
+    ch = ch
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'entries',filter:'race_code=eq.'+raceCode},
+        payload=>{ onPooledStationEntry(payload.new); });
   }
   ch = ch
     .on('postgres_changes',{event:'*',schema:'public',table:'runners',filter:'race_code=eq.'+raceCode},
@@ -4872,6 +4935,43 @@ function onRemoteEntry(row){
   // Refresh runner cards so split times update
   renderRunners(); renderReg();
   toast(`📡 ${row.point_name}: BIB ${row.bib} @ ${row.time}`,'b');
+}
+
+// Called on marshal devices when a pooled-station peer pushes an entry.
+// If the entry is from the same station (same point_name), merge it into
+// local entries[] deduplicated by bib — earliest timestamp wins.
+// Entries from OTHER stations are ignored (the hub handles cross-station view).
+function onPooledStationEntry(row){
+  if(row.device_id===deviceId) return; // own echo
+  if(row.point_name!==timingPoint) return; // different station — not our pool
+  if(row.type!=='finish'&&row.type!=='log') return;
+  // Already have this exact uid?
+  if(entries.some(e=>e.uid===row.uid)) return;
+  // Dedup by bib for finish entries — keep only the earliest timestamp
+  if(row.type==='finish'&&row.bib){
+    const incomingTs=row.timestamp||Date.now();
+    const existing=entries.find(e=>e.type==='finish'&&e.bib===row.bib);
+    if(existing){
+      const existingTs=existing.timestamp||0;
+      if(incomingTs>=existingTs) return; // ours is earlier or same — discard
+      // Peer's is earlier — remove ours and replace
+      const idx=entries.indexOf(existing);
+      entries.splice(idx,1);
+    }
+  }
+  // Merge in the peer's entry — mark it as pooled so UI can show the source device
+  const merged={
+    uid:row.uid, type:row.type, bib:row.bib, time:row.time,
+    pos:row.pos, timestamp:row.timestamp, hasFlag:row.has_flag,
+    flagReason:row.flag_reason, tags:[], device:row.point_name,
+    _pooledFrom:row.device_id.slice(-6), // short ID of the device that recorded it
+  };
+  entries.push(merged);
+  // Re-sort by timestamp so positions stay coherent
+  entries.sort((a,b)=>(a.timestamp||0)-(b.timestamp||0));
+  saveE();
+  renderResults(); renderRunners();
+  toast(`👥 Pool: BIB ${row.bib} @ ${row.time} (device …${row.device_id.slice(-6)})`,'b');
 }
 
 function onRemoteRunner(row){
@@ -5067,21 +5167,43 @@ async function supaPullRaceData(){
       }
     });
   }
-  // Pull entries from OTHER points (splits for hub view)
-  // Pull other devices' entries into _remoteSplits only — never into entries[]
+  // Pull entries from OTHER devices
   const {data:eData}=await supa.from('entries').select('*').eq('race_code',raceCode).neq('device_id',deviceId);
   if(eData?.length){
     if(!window._remoteSplits) window._remoteSplits={};
-    let added=0;
+    let remoteAdded=0, poolAdded=0;
     eData.forEach(row=>{
+      // Pooled station: same point_name, different device — merge into local entries[]
+      if(!isHub && marshalOnline && row.point_name===timingPoint){
+        if(!entries.some(e=>e.uid===row.uid)){
+          // Dedup by bib — earliest timestamp wins
+          if(row.type==='finish'&&row.bib){
+            const incomingTs=row.timestamp||Date.now();
+            const existing=entries.find(e=>e.type==='finish'&&e.bib===row.bib);
+            if(existing&&(existing.timestamp||0)<=incomingTs) return; // keep ours
+            if(existing){ entries.splice(entries.indexOf(existing),1); } // replace with earlier
+          }
+          entries.push({
+            uid:row.uid, type:row.type, bib:row.bib, time:row.time,
+            pos:row.pos, timestamp:row.timestamp, hasFlag:row.has_flag,
+            flagReason:row.flag_reason, tags:[], device:row.point_name,
+            _pooledFrom:row.device_id.slice(-6),
+          });
+          poolAdded++;
+        }
+        return; // don't also add to _remoteSplits
+      }
+      // Everything else → _remoteSplits (hub cross-station view, or non-pool entries)
       if(!window._remoteSplits[row.uid]){
         window._remoteSplits[row.uid]={
           uid:row.uid, type:row.type, bib:row.bib, time:row.time,
           pos:row.pos, device:row.point_name, timestamp:row.timestamp,
-        }; added++;
+        }; remoteAdded++;
       }
     });
-    if(added){ renderRunners(); renderReg(); }
+    if(poolAdded){ entries.sort((a,b)=>(a.timestamp||0)-(b.timestamp||0)); saveE(true); }
+    if(poolAdded||remoteAdded){ renderRunners(); renderReg(); renderResults(); }
+    if(poolAdded) toast(`👥 ${poolAdded} entr${poolAdded===1?'y':'ies'} pulled from station pool`,'b');
   }
 }
 
@@ -5165,21 +5287,46 @@ async function loadConnectedPoints(){
       return ago>=10 && p.device_id!==deviceId;
     });
     if(staleBtn) staleBtn.style.display=isHub&&hasStale?'':'none';
-    el.innerHTML = data.map(p=>{
-      const ago = Math.floor((Date.now()-new Date(p.last_seen).getTime())/60000);
-      const agoTxt = ago < 1 ? 'Just now' : ago < 60 ? `${ago}m ago` : `${Math.floor(ago/60)}h ago`;
-      const isMe = p.device_id === deviceId;
-      const statusCol = ago < 5 ? '#1a7a3a' : ago < 30 ? '#9a7000' : '#b02020';
-      const kickBtn = isHub && !isMe
-        ? `<button onclick="kickDeviceById('${p.device_id}','${esc(p.point_name)}')" title="Force disconnect" style="flex-shrink:0;font-size:.65rem;padding:3px 7px;background:none;border:1px solid #b06000;color:#b06000;border-radius:4px;cursor:pointer;">⏏</button>`
-        : '';
-      return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:${isMe?'#ddf0ee':'#fff'};border:1px solid ${isMe?'#006b5e':'var(--bdr)'};border-radius:5px;">
-        <div style="width:8px;height:8px;border-radius:50%;background:${statusCol};flex-shrink:0;"></div>
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:.78rem;font-weight:600;">${esc(p.point_name)}${isMe?' <span style=\"font-size:.6rem;color:#006b5e;\">(this device)</span>':''}${p.is_hub?' 🖥':''}</div>
-          <div style="font-size:.62rem;color:var(--mut);">${agoTxt} · ID: ${p.device_id.slice(-6)}</div>
+    // Group by station name so pooled devices appear together
+    const groups={};
+    data.forEach(p=>{
+      const key=p.is_hub?'__hub__':p.point_name;
+      if(!groups[key]) groups[key]=[];
+      groups[key].push(p);
+    });
+    el.innerHTML = Object.entries(groups).map(([,pts])=>{
+      const isHubGroup=pts[0].is_hub;
+      const stationName=pts[0].point_name;
+      const pooled=pts.length>1&&!isHubGroup;
+      const meInGroup=pts.some(p=>p.device_id===deviceId);
+      // Pick the most-recently-seen device for the status dot
+      const newest=pts.reduce((a,b)=>new Date(a.last_seen)>new Date(b.last_seen)?a:b);
+      const ago=Math.floor((Date.now()-new Date(newest.last_seen).getTime())/60000);
+      const agoTxt=ago<1?'Just now':ago<60?`${ago}m ago`:`${Math.floor(ago/60)}h ago`;
+      const statusCol=ago<5?'#1a7a3a':ago<30?'#9a7000':'#b02020';
+      const deviceList=pts.map(p=>{
+        const isMe=p.device_id===deviceId;
+        const pAgo=Math.floor((Date.now()-new Date(p.last_seen).getTime())/60000);
+        const pAgoTxt=pAgo<1?'now':pAgo<60?`${pAgo}m`:`${Math.floor(pAgo/60)}h`;
+        const kickBtn=isHub&&!isMe
+          ?`<button onclick="kickDeviceById('${p.device_id}','${esc(p.point_name)}')" title="Disconnect" style="font-size:.6rem;padding:2px 5px;background:none;border:1px solid #b06000;color:#b06000;border-radius:3px;cursor:pointer;">⏏</button>`
+          :'';
+        return `<div style="display:flex;align-items:center;gap:5px;font-size:.62rem;color:var(--mut);padding:1px 0;">
+          <span style="font-family:'DM Mono',monospace;">…${p.device_id.slice(-6)}</span>
+          ${isMe?'<span style="color:#006b5e;">(this device)</span>':''}
+          <span style="margin-left:auto;">${pAgoTxt}</span>
+          ${kickBtn}
+        </div>`;
+      }).join('');
+      return `<div style="background:${meInGroup?'#ddf0ee':'#fff'};border:1px solid ${meInGroup?'#006b5e':'var(--bdr)'};border-radius:5px;padding:7px 10px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="width:8px;height:8px;border-radius:50%;background:${statusCol};flex-shrink:0;"></div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:.78rem;font-weight:600;">${esc(stationName)}${isHubGroup?' 🖥':''}${pooled?` <span style="font-size:.6rem;background:#e8f0ff;color:#1a3a8a;border-radius:3px;padding:1px 4px;">👥 ${pts.length} devices</span>`:''}</div>
+            <div style="font-size:.62rem;color:var(--mut);">${agoTxt}</div>
+          </div>
         </div>
-        ${kickBtn}
+        ${pooled?`<div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--bdr2);">${deviceList}</div>`:''}
       </div>`;
     }).join('');
     // Update last_seen for this device
