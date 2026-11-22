@@ -2864,7 +2864,7 @@ async function completeMarshalSetup(){
         const rawParts=rawInput.split('-');
         const slugPart=rawParts.slice(2).join('-'); // e.g. "KM10" from "MKA-001-KM10"
         const {data:manifest}=await sbv.from('timing_points')
-          .select('meta').eq('race_code',raceCodePart).eq('device_id','hub-stations-manifest').single();
+          .select('meta').eq('race_code',raceCodePart).eq('device_id','hub-stations-manifest').maybeSingle();
         if(manifest&&manifest.meta){
           const stations=JSON.parse(manifest.meta);
           if(stations.length>0){
@@ -5016,6 +5016,20 @@ function dismissDNFAlert(){
   if(bar) bar.style.display='none';
 }
 
+// Resolve a raw point_name from Supabase (may be slug like "KM21" or full name like "KM 21")
+// to the full station name in _adminStations. Falls back to the raw value if no match.
+function resolveStationName(pointName){
+  if(!pointName||!_adminStations||!_adminStations.length) return pointName;
+  // Exact name match first
+  const byName=_adminStations.find(s=>s.name===pointName);
+  if(byName) return byName.name;
+  // Slug match (case-insensitive)
+  const upper=(pointName||'').toUpperCase();
+  const bySlug=_adminStations.find(s=>(s.slug||'').toUpperCase()===upper);
+  if(bySlug) return bySlug.name;
+  return pointName; // unknown station — return as-is
+}
+
 function onRemoteEntry(row){
   // Don't apply our own entries back
   if(row.device_id===deviceId) return;
@@ -5024,13 +5038,16 @@ function onRemoteEntry(row){
   const key=row.uid;
   if(window._remoteSplits[key]) return; // already have it (exact uid)
 
+  // Resolve point_name slug → full station name so hub comparisons work
+  const resolvedDevice=resolveStationName(row.point_name);
+
   // Station pooling dedup: for finish entries, keep only the EARLIEST timestamp per bib per station
   if(row.type==='finish'&&row.bib&&row.point_name){
     const incomingTs=row.timestamp||Date.now();
     // Find any existing record for same bib + same station
     const existingKey=Object.keys(window._remoteSplits).find(k=>{
       const e=window._remoteSplits[k];
-      return e.type==='finish' && e.bib===row.bib && e.device===row.point_name;
+      return e.type==='finish' && e.bib===row.bib && e.device===resolvedDevice;
     });
     if(existingKey){
       const existingTs=window._remoteSplits[existingKey].timestamp||0;
@@ -5042,7 +5059,7 @@ function onRemoteEntry(row){
 
   window._remoteSplits[key]={
     uid:row.uid, type:row.type, bib:row.bib, time:row.time,
-    pos:row.pos, device:row.point_name, timestamp:row.timestamp,
+    pos:row.pos, device:resolvedDevice, timestamp:row.timestamp,
   };
   // Refresh all hub views — results stats (Finished/Still Out), runner cards, reg
   renderHubResults(); renderRunners(); renderReg();
@@ -5309,7 +5326,7 @@ async function supaPullRaceData(){
       if(!window._remoteSplits[row.uid]){
         window._remoteSplits[row.uid]={
           uid:row.uid, type:row.type, bib:row.bib, time:row.time,
-          pos:row.pos, device:row.point_name, timestamp:row.timestamp,
+          pos:row.pos, device:resolveStationName(row.point_name), timestamp:row.timestamp,
         }; remoteAdded++;
       }
     });
