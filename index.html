@@ -3185,15 +3185,18 @@ async function shareResults(){
 
 function buildCSVBlob(){
   let csv=`Point,Race,Position,Bib,Time,Type,Name,Distance,Wave,Age,Gender,Team,Flag,Notes\n`;
+  const gMap={M:'Male',F:'Female',MX:'Mixed',NB:'Non-binary'};
+  const q=v=>`"${String(v??'').replace(/"/g,"'")}"`;
   entries.forEach(e=>{
-    if(e.type==='log'){csv+=`"${timingPoint}","${raceName}","","${e.time}",Log,"","","","","","","","${(e.tags||[]).join('|')}"\n`;return;}
     const rs_=runners.filter(x=>baseBib(x.bib)===baseBib(e.bib));
-    const rBest_=rs_.find(x=>x.bib===e.bib)||rs_.find(x=>x.bib.replace(/^[A-Za-z]+/,'')===e.bib.replace(/^[A-Za-z]+/,''))||rs_[0];
-    const r=rBest_||null;
-    const expBib=r&&r.bib?r.bib:e.bib;
-    const gMap={M:'Male',F:'Female',MX:'Mixed',NB:'Non-binary'};
-    const tags=(e.tags||[]).join('|');
-    csv+=`"${timingPoint}","${raceName}",${e.pos},"${expBib}","${e.time}",Finish,"${r?r.name:''}","${r?.distance||''}","${r?.wave||''}","${r?.age||''}","${gMap[r?.gender]||r?.gender||''}","${e.isTeam?'YES':''}","${e.hasFlag?'YES':''}","${tags}"\n`;
+    const r=rs_.find(x=>x.bib===e.bib)||rs_.find(x=>x.bib.replace(/^[A-Za-z]+/,'')===e.bib.replace(/^[A-Za-z]+/,''))||rs_[0]||null;
+    const expBib=r?.bib||e.bib;
+    const tags=(e.tags||[]).join(' | ');
+    if(e.type==='log'){
+      csv+=`${q(timingPoint)},${q(raceName)},,,"${e.time}",Log,,,,,,,,"${(e.logText||tags).replace(/"/g,"'")}"\n`;
+      return;
+    }
+    csv+=`${q(timingPoint)},${q(raceName)},${e.pos??''},${q(expBib)},"${e.time}",Finish,${q(r?.name||'')},${q(r?.distance||'')},${q(r?.wave||'')},${q(r?.age||'')},${q(gMap[r?.gender]||r?.gender||'')},${q(r?.team||'')},${e.hasFlag?'YES':''},${q(tags)}\n`;
   });
   return new Blob([csv],{type:'text/csv'});
 }
@@ -4027,11 +4030,19 @@ function buildExp(){
 }
 function expCSV(){
   let csv=`Point,Race,Position,Bib,Time,Type,Name,Distance,Wave,Age,Gender,Team,Flag,Notes\n`;
+  const gMap={M:'Male',F:'Female',MX:'Mixed',NB:'Non-binary'};
+  const q=v=>`"${String(v??'').replace(/"/g,"'")}"`;
   entries.forEach(e=>{
-    const r=runners.find(x=>baseBib(x.bib)===baseBib(e.bib));
-    const tags=(e.tags||[]).join(' | ').replace(/"/g,"'");
-    if(e.type==='log')csv+=`—,[LOG],${e.time},Log,,,,"${e.logText||''}"\n`;
-    else{const gMap={M:'Male',F:'Female',MX:'Mixed',NB:'Non-binary'}; csv+=`${e.pos},"${(()=>{const rs__=runners.filter(x=>baseBib(x.bib)===baseBib(e.bib));const rb__=rs__.find(x=>x.bib===e.bib)||rs__.find(x=>x.bib.replace(/^[A-Za-z]+/,'')===e.bib.replace(/^[A-Za-z]+/,''))||rs__[0];return rb__?rb__.bib:e.bib;})()}","${e.time}",Finish,"${r?r.name:''}","${r?.distance||''}","${r?.wave||''}","${r?.age||''}","${gMap[r?.gender]||r?.gender||''}","${e.isTeam?'YES':''}","${e.hasFlag?'YES':''}","${tags}"\n`;}
+    const rs_=runners.filter(x=>baseBib(x.bib)===baseBib(e.bib));
+    const r=rs_.find(x=>x.bib===e.bib)||rs_.find(x=>x.bib.replace(/^[A-Za-z]+/,'')===e.bib.replace(/^[A-Za-z]+/,''))||rs_[0]||null;
+    const tags=(e.tags||[]).join(' | ');
+    if(e.type==='log'){
+      // Point,Race,Position,Bib,Time,Type,Name,Distance,Wave,Age,Gender,Team,Flag,Notes
+      csv+=`${q(timingPoint)},${q(raceName)},,,"${e.time}",Log,,,,,,,,"${(e.logText||tags).replace(/"/g,"'")}"\n`;
+    } else {
+      const bib=(()=>{const rs__=runners.filter(x=>baseBib(x.bib)===baseBib(e.bib));const rb__=rs__.find(x=>x.bib===e.bib)||rs__.find(x=>x.bib.replace(/^[A-Za-z]+/,'')===e.bib.replace(/^[A-Za-z]+/,''))||rs__[0];return rb__?rb__.bib:e.bib;})();
+      csv+=`${q(timingPoint)},${q(raceName)},${e.pos??''},${q(bib)},"${e.time}",Finish,${q(r?.name||'')},${q(r?.distance||'')},${q(r?.wave||'')},${q(r?.age||'')},${q(gMap[r?.gender]||r?.gender||'')},${q(r?.team||'')},${e.hasFlag?'YES':''},${q(tags)}\n`;
+    }
   });
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
