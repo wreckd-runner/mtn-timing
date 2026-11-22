@@ -2929,16 +2929,9 @@ function addMarshalStation(fromPanel){
   const next=names.find(n=>!used.includes(n))||`Point ${_adminStations.length+1}`;
   const slugs=_adminStations.map(s=>s.slug);
   _adminStations.push({name:next, slug:uniqueSlug(next,slugs)});
-  // Auto-mark last station as finish if none designated yet
+  // Auto-mark last station as finish ONLY if no station is currently designated
   if(!_adminStations.some(s=>s.isFinish)){
     _adminStations[_adminStations.length-1].isFinish=true;
-  } else {
-    // Move finish badge to last station if it was on the previous last
-    const prevLast=_adminStations[_adminStations.length-2];
-    if(prevLast&&prevLast.isFinish){
-      prevLast.isFinish=false;
-      _adminStations[_adminStations.length-1].isFinish=true;
-    }
   }
   saveStations();
   renderAdminStations();
@@ -3038,6 +3031,7 @@ function toggleFinishStation(i){
   }
   saveStations();
   renderAdminStations();
+  renderStationsPanel();
   publishStationListToSupa();
 }
 
@@ -4551,8 +4545,26 @@ function setRunnerStatus(i,status){
   renderRunners(); renderReg(); renderResults(); updBadge();
   if(isHub){
     toast(runners[i].status ? `${status==='DNF'?'❌':'🚫'} ${r.name||'BIB '+r.bib} marked ${status}` : 'Status cleared','y');
+  } else if(marshalOnline && supa && raceCode){
+    // Online marshal — push DNF/DNS directly to runners table so hub + pooled devices receive it
+    const newStatus=runners[i].status;
+    supa.from('runners').upsert({
+      bib:r.bib, race_code:raceCode,
+      name:r.name||'', team_name:r.teamName||'', distance:r.distance||'',
+      wave:r.wave||'', age:r.age||'', gender:r.gender||'',
+      conditions:r.conditions||'', notes:r.notes||'',
+      team_partner_bib:r.teamPartnerBib||'',
+      status:newStatus,
+      checked_in:r.checkedIn||false, check_in_time:r.checkInTime||'',
+      change_log:r.changeLog||[], runner_tags:r.runnerTags||[],
+      updated_by:deviceId, updated_at:new Date().toISOString(),
+    },{onConflict:'bib,race_code',ignoreDuplicates:false})
+    .then(({error})=>{
+      if(error) toast(`${newStatus?newStatus+' recorded (offline — report to hub)':'Status cleared (offline)'}`, 'y');
+      else toast(newStatus ? `${newStatus==='DNF'?'❌':'🚫'} ${r.name||'BIB '+r.bib} marked ${newStatus} — hub notified` : 'Status cleared — hub notified','g');
+    });
   } else {
-    toast(runners[i].status ? `${status==='DNF'?'❌':'🚫'} ${r.name||'BIB '+r.bib} marked ${status} (local only — report to hub)` : 'Status cleared (local)','y');
+    toast(runners[i].status ? `${status==='DNF'?'❌':'🚫'} ${r.name||'BIB '+r.bib} marked ${status} (offline — report to hub)` : 'Status cleared (local)','y');
   }
 }
 function delRunner(i){
