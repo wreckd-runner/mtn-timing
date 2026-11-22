@@ -4617,22 +4617,38 @@ function renderRunners(){
       || (r.wave||'').toLowerCase().includes(q)
       || (r.age||'').toLowerCase().includes(q);
   });
-  // On hub, finishes come from _remoteSplits (marshal stations) not local entries[]
-  const remoteFinsByBib={};
+  // On hub, "finished" = timed at the designated 🏁 finish station only.
+  // Other station entries are splits/checkpoints, not finishes.
+  const finishStationName=isHub?(_adminStations.find(s=>s.isFinish)?.name||null):null;
+  const finishedBibs=new Set(); // bibs confirmed at the finish line
+  const finishEntriesByBib={}; // finish-line entries per bib (for card display)
   if(isHub){
+    // Local entries from hub itself (rare, but possible)
+    entries.filter(e=>e.type==='finish').forEach(e=>{
+      if(!finishStationName||(e.device||timingPoint)===finishStationName){
+        const b=baseBib(e.bib);
+        finishedBibs.add(b);
+        if(!finishEntriesByBib[b]) finishEntriesByBib[b]=[];
+        finishEntriesByBib[b].push(e);
+      }
+    });
+    // Remote splits from finish station only
     Object.values(window._remoteSplits||{}).filter(e=>e.type==='finish').forEach(e=>{
-      const b=baseBib(e.bib);
-      if(!remoteFinsByBib[b]) remoteFinsByBib[b]=[];
-      remoteFinsByBib[b].push(e);
+      if(!finishStationName||e.device===finishStationName){
+        const b=baseBib(e.bib);
+        finishedBibs.add(b);
+        if(!finishEntriesByBib[b]) finishEntriesByBib[b]=[];
+        finishEntriesByBib[b].push(e);
+      }
     });
   }
   // Filter chips
   shown=shown.filter(({r})=>{
-    const localFins=entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(r.bib));
-    const remoteFins=remoteFinsByBib[baseBib(r.bib)]||[];
-    const fins=[...localFins,...remoteFins];
-    const hasFin=fins.length>0;
-    const grpCount=runners.filter(x=>baseBib(x.bib)===baseBib(r.bib)).length;
+    const b=baseBib(r.bib);
+    // On hub: finished = at finish station. On marshal: finished = any local finish entry.
+    const hasFin=isHub ? finishedBibs.has(b) : entries.some(e=>e.type==='finish'&&baseBib(e.bib)===b);
+    const fins=isHub ? (finishEntriesByBib[b]||[]) : entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===b);
+    const grpCount=runners.filter(x=>baseBib(x.bib)===b).length;
     if(rFilt==='pending')  return !hasFin && r.status!=='DNF' && r.status!=='DNS';
     if(rFilt==='finished') return hasFin;
     if(rFilt==='dnf')      return r.status==='DNF';
@@ -4643,9 +4659,11 @@ function renderRunners(){
   });
   if(!shown.length){list.innerHTML=`<div class="empty"><div class="ei">📋</div><p>${runners.length?'No match':'No runners loaded'}</p></div>`;return;}
   list.innerHTML=shown.map(({r,i})=>{
-    const localFins=entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(r.bib));
-    const remoteFins=remoteFinsByBib[baseBib(r.bib)]||[];
-    const fins=[...localFins,...remoteFins];
+    const b=baseBib(r.bib);
+    // fins for card display: finish-station entries on hub, all local finishes on marshal
+    const fins=isHub ? (finishEntriesByBib[b]||[]) : entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===b);
+    // All remote splits (any station) for the splits row below the status line
+    const allRemoteSplits=isHub ? Object.values(window._remoteSplits||{}).filter(e=>e.type==='finish'&&baseBib(e.bib)===b) : [];
     const grpCount=runners.filter(x=>baseBib(x.bib)===baseBib(r.bib)).length;
     const dupWarn=grpCount>2?`<div class="rc-al" style="color:var(--ora);border-color:var(--ora);background:rgba(192,92,0,.08);">⚠ ${grpCount} runners on this bib</div>`:'';
     const gLabel={M:'♂ M',F:'♀ F',MX:'⚡ Mixed',NB:'◈ NB'}[r.gender]||'';
@@ -4675,10 +4693,8 @@ function renderRunners(){
                 return esc(tb)+(tm&&tm.name?' '+esc(tm.name):'')+(te?' ✅#'+te.pos:'');
               }).join(' · ')+'</div>';
           }
-          // Splits from other timing points
-          const rs=window._remoteSplits||{};
-          const splits=Object.values(rs).filter(s=>s.type==='finish'&&baseBib(s.bib)===baseBib(r.bib));
-          splits.sort((a,b)=>a.time.localeCompare(b.time));
+          // Checkpoint splits from all stations (shown as info, not as "finished")
+          const splits=[...allRemoteSplits].sort((a,b)=>a.time.localeCompare(b.time));
           html+=splits.map(s=>`<div style="font-size:.6rem;color:#1a4a8a;font-family:'DM Mono',monospace;margin-top:1px;">📍 ${esc(s.device)} @ ${s.time}</div>`).join('');
           return html;
         })()}
