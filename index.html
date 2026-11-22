@@ -427,7 +427,7 @@ tbody tr.rdata:active{background:#f0f0ea;}
     <div style="text-align:center;margin-bottom:32px;">
       <div class="logo" style="font-size:2rem;letter-spacing:8px;margin-bottom:4px;">MT<span class="logo-n">N</span></div>
       <div class="subhead" style="font-size:.65rem;">Mountain Time Node</div>
-      <div style="margin-top:10px;font-size:.78rem;color:var(--mut);">Scan the QR code from your hub, or enter your station code</div>
+      <div style="margin-top:10px;font-size:.78rem;color:var(--mut);">Scan the QR code from your hub operator — station codes are set up by the hub only.</div>
     </div>
     <div style="width:100%;max-width:380px;display:flex;flex-direction:column;gap:14px;">
 
@@ -440,7 +440,7 @@ tbody tr.rdata:active{background:#f0f0ea;}
             oninput="this.value=this.value.toUpperCase();parseMarshalCode(this.value)">
           <button onclick="openSetupQRScan()" style="background:#006b5e;border:none;color:#fff;border-radius:7px;padding:10px 12px;font-size:1.1rem;cursor:pointer;flex-shrink:0;" title="Scan QR code">📷</button>
         </div>
-        <div style="font-size:.65rem;color:#006b5e;margin-top:6px;">Scan the QR from your hub operator, or type the station code</div>
+        <div style="font-size:.65rem;color:#006b5e;margin-top:6px;">Scan the QR from your hub operator, or type the code they give you</div>
       </div>
 
       <!-- Parsed preview -->
@@ -457,8 +457,9 @@ tbody tr.rdata:active{background:#f0f0ea;}
       </div>
 
       <!-- Offline-only fallback -->
-      <div id="marshal-manual-section" style="display:none;background:#fff;border:1px solid var(--bdr);border-radius:6px;padding:12px;">
-        <div style="font-size:.7rem;color:var(--mut);margin-bottom:8px;">No code? Enter manually for offline-only timing</div>
+      <div id="marshal-manual-section" style="display:none;background:#fff8ee;border:1px solid #d4aa60;border-radius:6px;padding:12px;">
+        <div style="font-size:.72rem;font-weight:700;color:#7a4000;margin-bottom:4px;">📴 Standalone mode — offline timing only, no hub connection.</div>
+        <div style="font-size:.68rem;color:#7a4000;margin-bottom:8px;">This device will record times locally only. For hub sync, get a station code from your hub operator.</div>
         <div style="display:flex;flex-direction:column;gap:8px;">
           <div>
             <label class="flbl" style="font-size:.7rem;">Station Name</label>
@@ -492,7 +493,7 @@ tbody tr.rdata:active{background:#f0f0ea;}
 
       <!-- Toggle to manual -->
       <div style="text-align:center;">
-        <button onclick="toggleMarshalManual()" style="background:none;border:none;color:var(--mut);font-size:.72rem;cursor:pointer;text-decoration:underline;" id="marshal-manual-toggle">No station code — enter manually</button>
+        <button onclick="toggleMarshalManual()" style="background:none;border:none;color:var(--mut);font-size:.72rem;cursor:pointer;text-decoration:underline;" id="marshal-manual-toggle">Running standalone (no hub) — set up manually</button>
       </div>
 
       <!-- Admin link -->
@@ -515,8 +516,8 @@ tbody tr.rdata:active{background:#f0f0ea;}
         <div style="width:48px;"></div>
       </div>
 
-      <div style="font-size:.9rem;font-weight:700;color:#1a1a1a;margin-bottom:4px;">🖥 Hub / Race Admin</div>
-      <div style="font-size:.72rem;color:var(--mut);margin-bottom:16px;">The hub is the single base station. It controls the start list, start and finish timing, and collects results from all marshal stations at the end of the race.</div>
+      <div style="font-size:.9rem;font-weight:700;color:#1a1a1a;margin-bottom:4px;">🖥 Hub Station Setup</div>
+      <div style="font-size:.72rem;color:var(--mut);margin-bottom:16px;">The hub is the race control device. It defines the course, sets up all aid station codes, and collects results from every timing point. Aid stations must scan the QR code generated here — they cannot create their own codes.</div>
 
       <!-- Race details -->
       <div style="background:#fff;border:1px solid var(--bdr);border-radius:8px;padding:14px;margin-bottom:12px;">
@@ -547,10 +548,10 @@ tbody tr.rdata:active{background:#f0f0ea;}
       <!-- Marshal stations -->
       <div style="background:#fff;border:1px solid var(--bdr);border-radius:8px;padding:14px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <div style="font-size:.75rem;font-weight:700;color:#444;">Marshal Stations</div>
+          <div style="font-size:.75rem;font-weight:700;color:#444;">📍 Aid Stations — Course Order</div>
           <button onclick="addMarshalStation()" class="btn acc" style="padding:5px 10px;font-size:.7rem;">+ Add Station</button>
         </div>
-        <div style="font-size:.68rem;color:var(--mut);margin-bottom:10px;">Each station gets its own QR code. Marshals scan it to set up their device instantly.</div>
+        <div style="font-size:.68rem;color:var(--mut);margin-bottom:10px;">Add each aid station in course order from start to finish. Mark the 🏁 Finish station. Each station gets its own QR code — marshals scan it to connect their device.</div>
         <div id="admin-stations-list" style="display:flex;flex-direction:column;gap:8px;">
           <!-- Populated dynamically -->
         </div>
@@ -2770,7 +2771,7 @@ let _marshalManualMode=false;
 function toggleMarshalManual(){
   _marshalManualMode=!_marshalManualMode;
   document.getElementById('marshal-manual-section').style.display=_marshalManualMode?'block':'none';
-  document.getElementById('marshal-manual-toggle').textContent=_marshalManualMode?'Hide manual entry':'No station code — enter manually';
+  document.getElementById('marshal-manual-toggle').textContent=_marshalManualMode?'← Back to station code entry':'Running standalone (no hub) — set up manually';
 }
 
 function updateMarshalOnlineToggleUI(){
@@ -2843,6 +2844,32 @@ async function completeMarshalSetup(){
 
   const onlineMarshal=document.getElementById('marshal-online-toggle')?.checked&&!!newCode;
 
+  // Validate station code exists in hub's published station list
+  if(newCode && navigator.onLine){
+    try{
+      const sbv=supa||(window.supabase?.createClient?.(SUPA_URL,SUPA_KEY));
+      if(sbv){
+        const raceCodePart=newCode; // e.g. "MKA-001"
+        // Extract the slug portion from the raw station code input
+        const rawInput=(document.getElementById('marshal-station-code')?.value||'').trim().toUpperCase();
+        const rawParts=rawInput.split('-');
+        const slugPart=rawParts.slice(2).join('-'); // e.g. "KM10" from "MKA-001-KM10"
+        const {data:manifest}=await sbv.from('timing_points')
+          .select('meta').eq('race_code',raceCodePart).eq('device_id','hub-stations-manifest').single();
+        if(manifest&&manifest.meta){
+          const stations=JSON.parse(manifest.meta);
+          if(stations.length>0){
+            const match=stations.find(s=>(s.slug||'').toUpperCase()===slugPart);
+            if(!match){
+              err.textContent=`⚠ Station code not recognised. The hub hasn't created a station with this code. Ask your hub operator for the correct QR code or station code.`;
+              return;
+            }
+          }
+        }
+      }
+    }catch(e){ /* offline or no manifest — allow through */ }
+  }
+
   // If online, check Supabase for a conflicting device at this exact station code
   if(newCode && navigator.onLine){
     try{
@@ -2896,9 +2923,21 @@ function addMarshalStation(fromPanel){
   const next=names.find(n=>!used.includes(n))||`Point ${_adminStations.length+1}`;
   const slugs=_adminStations.map(s=>s.slug);
   _adminStations.push({name:next, slug:uniqueSlug(next,slugs)});
+  // Auto-mark last station as finish if none designated yet
+  if(!_adminStations.some(s=>s.isFinish)){
+    _adminStations[_adminStations.length-1].isFinish=true;
+  } else {
+    // Move finish badge to last station if it was on the previous last
+    const prevLast=_adminStations[_adminStations.length-2];
+    if(prevLast&&prevLast.isFinish){
+      prevLast.isFinish=false;
+      _adminStations[_adminStations.length-1].isFinish=true;
+    }
+  }
   saveStations();
   renderAdminStations();
   renderStationsPanel();
+  publishStationListToSupa();
 }
 
 function removeStation(i){
@@ -2921,22 +2960,121 @@ function renderAdminStations(){
   const list=document.getElementById('admin-stations-list');
   if(!list) return;
   if(!_adminStations.length){
-    list.innerHTML='<div style="font-size:.7rem;color:var(--mut);text-align:center;padding:8px;">No marshal stations yet — add one above</div>';
+    list.innerHTML=`<div style="font-size:.72rem;color:var(--mut);text-align:center;padding:8px;">No stations added yet. Add stations below in course order (start → finish).</div>`;
+    updateStationQRs&&updateStationQRs();
     return;
   }
   const rc=document.getElementById('setup-code')?.value.trim().toUpperCase()||raceCode||'???-???';
-  list.innerHTML=_adminStations.map((s,i)=>`
-    <div style="display:flex;align-items:center;gap:8px;background:#f7f7f5;border:1px solid var(--bdr2);border-radius:5px;padding:8px 10px;">
-      <span style="font-size:.75rem;">📍</span>
-      <div style="flex:1;min-width:0;">
-        <input class="fld" value="${esc(s.name)}" maxlength="40"
-          style="font-size:.82rem;padding:4px 6px;border:1px solid var(--bdr2);border-radius:3px;width:100%;"
-          onchange="updateStationName(${i},this.value)">
-        <div style="font-size:.6rem;color:var(--mut);margin-top:2px;font-family:'DM Mono',monospace;">${rc}-${s.slug}</div>
+  list.innerHTML=_adminStations.map((s,i)=>{
+    const code=rc?`${rc}-${s.slug}`:'—';
+    const isFirst=i===0, isLast=i===_adminStations.length-1;
+    const ordinal=isFirst?'1st (Start)':isLast?`${i+1}${nth(i+1)} (Last)`:`${i+1}${nth(i+1)}`;
+    const finishBadge=s.isFinish
+      ?`<span style="font-size:.6rem;font-weight:700;background:#1a7a3a;color:#fff;border-radius:4px;padding:1px 5px;cursor:pointer;" onclick="toggleFinishStation(${i})" title="Click to unmark as finish">🏁 FINISH</span>`
+      :`<span style="font-size:.6rem;color:var(--mut);border:1px solid var(--bdr);border-radius:4px;padding:1px 5px;cursor:pointer;" onclick="toggleFinishStation(${i})" title="Mark as finish line">🏁 set finish</span>`;
+    return `<div style="background:var(--surf2);border:1px solid ${s.isFinish?'#1a7a3a':'var(--bdr)'};border-radius:7px;padding:10px 12px;margin-bottom:4px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+        <div style="display:flex;flex-direction:column;gap:1px;flex-shrink:0;">
+          <button onclick="moveStation(${i},-1)" style="background:none;border:1px solid var(--bdr);border-radius:3px;padding:0 5px;font-size:.6rem;cursor:pointer;line-height:1.6;${isFirst?'opacity:.3;pointer-events:none;':''}">↑</button>
+          <button onclick="moveStation(${i},1)" style="background:none;border:1px solid var(--bdr);border-radius:3px;padding:0 5px;font-size:.6rem;cursor:pointer;line-height:1.6;${isLast?'opacity:.3;pointer-events:none;':''}">↓</button>
+        </div>
+        <div style="font-size:.6rem;color:var(--mut);min-width:40px;text-align:center;flex-shrink:0;">${ordinal}</div>
+        <div id="admin-stn-name-display-${i}" style="flex:1;min-width:0;">
+          <div style="font-size:.82rem;font-weight:700;cursor:pointer;" onclick="startAdminRenameStation(${i})">${esc(s.name)} <span style="font-size:.6rem;color:var(--mut);">✎</span></div>
+        </div>
+        <div id="admin-stn-name-edit-${i}" style="display:none;flex:1;">
+          <input id="admin-stn-name-input-${i}" value="${esc(s.name)}" maxlength="40"
+            style="font-size:.82rem;font-weight:700;border:1px solid var(--tel);border-radius:4px;padding:3px 7px;width:100%;background:var(--bg);color:var(--txt);"
+            onkeydown="if(event.key==='Enter')saveAdminStationName(${i});if(event.key==='Escape')cancelAdminRenameStation(${i})">
+          <div style="display:flex;gap:4px;margin-top:3px;">
+            <button onclick="saveAdminStationName(${i})" class="btn acc" style="padding:3px 8px;font-size:.62rem;">Save</button>
+            <button onclick="cancelAdminRenameStation(${i})" class="btn" style="padding:3px 8px;font-size:.62rem;">Cancel</button>
+          </div>
+        </div>
+        <button onclick="removeStation(${i})" style="background:none;border:none;color:var(--mut);font-size:.9rem;cursor:pointer;padding:0 4px;flex-shrink:0;" title="Remove">✕</button>
       </div>
-      <button onclick="showStationQR(${i},'setup')" class="btn" style="padding:5px 8px;font-size:.65rem;background:#1a4a8a;color:#fff;border:none;white-space:nowrap;">QR</button>
-      <button onclick="removeStation(${i})" style="background:none;border:none;color:var(--red);font-size:.9rem;cursor:pointer;padding:2px 4px;">✕</button>
-    </div>`).join('');
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          ${finishBadge}
+          <span style="font-size:.6rem;font-family:'DM Mono',monospace;color:var(--mut);cursor:pointer;" onclick="showStationQR(${i},'setup')" title="Show QR">${code}</span>
+        </div>
+        <button onclick="showStationQR(${i},'setup')" class="btn" style="padding:4px 10px;font-size:.6rem;flex-shrink:0;">📱 QR</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function nth(n){
+  const s=['th','st','nd','rd'];
+  const v=n%100;
+  return n+(s[(v-20)%10]||s[v]||s[0]);
+}
+
+function moveStation(i, dir){
+  const j=i+dir;
+  if(j<0||j>=_adminStations.length) return;
+  [_adminStations[i],_adminStations[j]]=[_adminStations[j],_adminStations[i]];
+  saveStations();
+  renderAdminStations();
+  renderStationsPanel();
+  publishStationListToSupa();
+}
+
+function toggleFinishStation(i){
+  if(_adminStations[i].isFinish){
+    // unmark — auto-fall back to last station
+    _adminStations[i].isFinish=false;
+    if(!_adminStations.some(s=>s.isFinish)){
+      _adminStations[_adminStations.length-1].isFinish=true;
+    }
+  } else {
+    _adminStations.forEach((s,idx)=>{ s.isFinish=(idx===i); });
+  }
+  saveStations();
+  renderAdminStations();
+  publishStationListToSupa();
+}
+
+function startAdminRenameStation(i){
+  const disp=document.getElementById(`admin-stn-name-display-${i}`);
+  const edit=document.getElementById(`admin-stn-name-edit-${i}`);
+  if(disp) disp.style.display='none';
+  if(edit){ edit.style.display=''; document.getElementById(`admin-stn-name-input-${i}`)?.focus(); }
+}
+
+function cancelAdminRenameStation(i){
+  const disp=document.getElementById(`admin-stn-name-display-${i}`);
+  const edit=document.getElementById(`admin-stn-name-edit-${i}`);
+  if(disp) disp.style.display='';
+  if(edit) edit.style.display='none';
+}
+
+function saveAdminStationName(i){
+  const inp=document.getElementById(`admin-stn-name-input-${i}`);
+  if(!inp) return;
+  const val=inp.value.trim();
+  if(!val) return;
+  _adminStations[i].name=val;
+  const slugs=_adminStations.map((s,j)=>j===i?null:s.slug).filter(Boolean);
+  _adminStations[i].slug=uniqueSlug(val,slugs);
+  saveStations();
+  renderAdminStations();
+  renderStationsPanel();
+  publishStationListToSupa();
+}
+
+async function publishStationListToSupa(){
+  if(!supa||!raceCode||!_adminStations.length) return;
+  try{
+    await supa.from('timing_points').upsert({
+      race_code: raceCode,
+      device_id: 'hub-stations-manifest',
+      point_name: '__stations__',
+      is_hub: false,
+      last_seen: new Date().toISOString(),
+      meta: JSON.stringify(_adminStations.map((s,i)=>({name:s.name,slug:s.slug,isFinish:!!s.isFinish,order:i})))
+    },{onConflict:'race_code,device_id'});
+  }catch(e){ console.warn('publishStationListToSupa failed',e); }
 }
 
 function stationFullCode(rc, station){
@@ -3262,6 +3400,7 @@ function completeAdminSetup(){
   // Save station list to localStorage so hub can reference it
   localStorage.setItem('mtn_stations_v1',JSON.stringify(_adminStations));
   _finishSetup({race, point, newCode:code, hub:true});
+  setTimeout(publishStationListToSupa, 1500);
 }
 
 // ── Shared setup completion ───────────────────────────────────────────────
