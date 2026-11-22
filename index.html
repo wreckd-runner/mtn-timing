@@ -717,7 +717,16 @@ tbody tr.rdata:active{background:#f0f0ea;}
             <button class="btn acc" onclick="shareResults()" id="share-btn" style="padding:6px 10px;font-size:.62rem;">↗ Share</button>
           </div>
         </div>
-        <div class="sgrid">
+        <!-- Hub stats -->
+        <div class="sgrid" id="hub-stats" style="display:none;">
+          <div class="sc"><div class="sv" id="hs-tot">0</div><div class="sl">Finished</div></div>
+          <div class="sc"><div class="sv" style="color:#e07000" id="hs-out">0</div><div class="sl">Still Out</div></div>
+          <div class="sc"><div class="sv" style="color:#901818" id="hs-dnf">0</div><div class="sl">DNF</div></div>
+          <div class="sc"><div class="sv" style="color:#6a5000" id="hs-dns">0</div><div class="sl">DNS</div></div>
+          <div class="sc"><div class="sv" style="color:#9a7800" id="hs-flag">0</div><div class="sl">Flags</div></div>
+        </div>
+        <!-- Marshal stats -->
+        <div class="sgrid" id="marshal-stats">
           <div class="sc"><div class="sv" id="s-tot">0</div><div class="sl">Finishers</div></div>
           <div class="sc"><div class="sv" style="color:#1a7a3a" id="s-field">0</div><div class="sl">In Field</div></div>
           <div class="sc"><div class="sv" style="color:#1a4a8a" id="s-team">0</div><div class="sl">Teams</div></div>
@@ -726,6 +735,7 @@ tbody tr.rdata:active{background:#f0f0ea;}
         </div>
         <div class="chips" id="chips">
           <div class="chip active" onclick="sf('all',this)">All</div>
+          <div class="chip" id="chip-field" onclick="sf('field',this)">⏳ In Field</div>
           <div class="chip" onclick="sf('teams',this)">👥 Teams</div>
           <div class="chip" onclick="sf('flags',this)">⚠ Flags</div>
           <div class="chip" onclick="sf('noted',this)">💬 Notes</div>
@@ -733,14 +743,25 @@ tbody tr.rdata:active{background:#f0f0ea;}
         </div>
       </div>
 
-      <!-- Hub-only: live splits from online marshal stations -->
-      <div id="hub-splits-banner" style="display:none;background:#e8f4ff;border-bottom:1px solid #aac4e8;padding:8px 14px;font-size:.7rem;color:#1a4a8a;display:flex;align-items:center;justify-content:space-between;gap:8px;">
-        <span>📡 Receiving live splits from aid stations — <span id="hub-splits-count">0</span> timing point(s) online</span>
-        <button onclick="supaPullRaceData()" style="font-size:.6rem;padding:3px 8px;background:#1a4a8a;color:#fff;border:none;border-radius:4px;cursor:pointer;">↻ Refresh</button>
+      <!-- Hub live splits banner -->
+      <div id="hub-splits-banner" style="display:none;background:#e8f4ff;border-bottom:1px solid #aac4e8;padding:8px 14px;font-size:.7rem;color:#1a4a8a;flex-direction:column;gap:4px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <span>📡 Live splits — <span id="hub-splits-count">0</span> station(s) online</span>
+          <button onclick="supaPullRaceData();toast('↻ Pulling…','b');" style="font-size:.6rem;padding:4px 10px;background:#1a4a8a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700;">↻ Refresh Splits</button>
+        </div>
+        <!-- Station filter chips (hub only) -->
+        <div id="hub-station-chips" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:2px;"></div>
       </div>
 
-      <!-- scrollable table -->
-      <div class="sz">
+      <!-- Hub view: grouped by station -->
+      <div class="sz" id="hub-results-view" style="display:none;">
+        <div id="hub-results-body"></div>
+        <div id="hub-still-out"></div>
+        <div id="hub-dsec"></div>
+      </div>
+
+      <!-- Marshal / single-device view: flat table -->
+      <div class="sz" id="marshal-results-view">
         <div class="tw">
           <table>
             <thead><tr><th>#</th><th>Bib</th><th>Time</th><th>Notes / Tags</th><th></th></tr></thead>
@@ -1438,6 +1459,7 @@ let _realtimeSub=null, _uploadQueue=[], _uploading=false;
 let timingPoint='', raceName='', isHub=false, marshalOnline=false;
 let lastSyncId='', deviceId='';
 let entries=[], runners=[], bib='', filt='all', rFilt='all', editTags=[];
+let hubStationFilter='all'; // 'all' or a station name (hub only)
 
 function load(){
   try{entries=JSON.parse(localStorage.getItem(SK_E))||[];}catch{entries=[];}
@@ -2022,6 +2044,28 @@ function recheckTeamFlags(){
 // ═══════════════ RESULTS ═══════════════
 function renderResults(){
   recheckTeamFlags();
+  // Hub uses a completely different grouped-by-station view
+  if(isHub){
+    const hv=document.getElementById('hub-results-view');
+    const mv=document.getElementById('marshal-results-view');
+    const hs=document.getElementById('hub-stats');
+    const ms=document.getElementById('marshal-stats');
+    if(hv) hv.style.display='block';
+    if(mv) mv.style.display='none';
+    if(hs) hs.style.display='';
+    if(ms) ms.style.display='none';
+    renderHubResults();
+    return;
+  }
+  // Marshal / single device: show/hide correct views
+  const hv=document.getElementById('hub-results-view');
+  const mv=document.getElementById('marshal-results-view');
+  const hs=document.getElementById('hub-stats');
+  const ms=document.getElementById('marshal-stats');
+  if(hv) hv.style.display='none';
+  if(mv) mv.style.display='block';
+  if(hs) hs.style.display='none';
+  if(ms) ms.style.display='';
   // Hard filter — Results table shows only this device's entries
   const ownEntries=entries.filter(e=>!e.device||e.device===timingPoint);
   // Issue detection on hub uses ALL finish data (own entries + every remote split)
@@ -2314,6 +2358,195 @@ function renderResults(){
     }
   }
   dsec.innerHTML=flagHtml+duplicateHtml+dnfTimedHtml+splitTeamHtml+unknownHtml+medicalHtml+marshalFlagHtml;
+}
+
+// ══════════════════════════════════════════════════════════
+// Hub results: grouped by aid station, ordered start→finish
+// ══════════════════════════════════════════════════════════
+function renderHubResults(){
+  const banner=document.getElementById('hub-splits-banner');
+  if(banner) banner.style.display='flex';
+
+  // All entries: own + remote splits
+  const remoteArr=Object.values(window._remoteSplits||{});
+  const ownFinish=entries.filter(e=>e.type==='finish');
+  ownFinish.forEach(e=>{ if(!e.device) e.device=timingPoint; });
+
+  // Merge by uid to avoid duplication
+  const allByUid={};
+  ownFinish.forEach(e=>{ allByUid[e.uid]=e; });
+  remoteArr.filter(e=>e.type==='finish').forEach(e=>{ if(!allByUid[e.uid]) allByUid[e.uid]=e; });
+  const allFinish=Object.values(allByUid);
+
+  // Determine station order: use _adminStations if available, else derive from data
+  let stationOrder=[];
+  if(window._adminStations&&window._adminStations.length){
+    stationOrder=window._adminStations.map(s=>s.name||s.slug||s);
+  } else {
+    const seen=new Set();
+    allFinish.forEach(e=>{ if(e.device) seen.add(e.device); });
+    stationOrder=[...seen].sort();
+    if(!stationOrder.length) stationOrder=[timingPoint];
+  }
+
+  // Group entries by station
+  const byStation={};
+  stationOrder.forEach(s=>{ byStation[s]=[]; });
+  allFinish.forEach(e=>{
+    const st=e.device||timingPoint;
+    if(!byStation[st]) byStation[st]=[];
+    byStation[st].push(e);
+  });
+  // Sort each station by pos then time
+  Object.values(byStation).forEach(arr=>{
+    arr.sort((a,b)=>(parseInt(a.pos)||9999)-(parseInt(b.pos)||9999)||(a.time||'').localeCompare(b.time||''));
+  });
+
+  // All known stations (ordered list + any extras from data)
+  const allStations=[...new Set([...stationOrder,...Object.keys(byStation)])].filter(s=>byStation[s]);
+
+  // Update station filter chips in banner
+  const chipContainer=document.getElementById('hub-station-chips');
+  if(chipContainer){
+    const allChip=`<div class="chip${hubStationFilter==='all'?' active':''}" onclick="hubStationFilter='all';renderHubResults();" style="font-size:.62rem;padding:3px 8px;">All Stations</div>`;
+    const stChips=allStations.map(s=>{
+      const count=byStation[s]?.length||0;
+      const active=hubStationFilter===s?' active':'';
+      const escaped=s.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      return `<div class="chip${active}" onclick="hubStationFilter='${escaped}';renderHubResults();" style="font-size:.62rem;padding:3px 8px;">📍 ${esc(s)} <span style="opacity:.7">(${count})</span></div>`;
+    }).join('');
+    chipContainer.innerHTML=allChip+stChips;
+  }
+
+  const displayStations=hubStationFilter==='all'?allStations:[hubStationFilter].filter(s=>byStation[s]);
+
+  // Compute stats
+  const finishedBibs=new Set(allFinish.map(e=>e.bib));
+  const totalFinished=runners.length
+    ? runners.filter(r=>r.status!=='DNS'&&r.status!=='DNF'&&finishedBibs.has(r.bib)).length
+    : allFinish.length;
+  const dnfCount=runners.filter(r=>r.status==='DNF').length;
+  const dnsCount=runners.filter(r=>r.status==='DNS').length;
+  const stillOut=runners.length
+    ? runners.filter(r=>!finishedBibs.has(r.bib)&&r.status!=='DNF'&&r.status!=='DNS')
+    : [];
+  const flagCount=allFinish.filter(e=>e.hasFlag).length;
+
+  const setT=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+  setT('hs-tot', totalFinished);
+  setT('hs-out', stillOut.length);
+  setT('hs-dnf', dnfCount);
+  setT('hs-dns', dnsCount);
+  setT('hs-flag', flagCount);
+
+  // Update banner point count
+  const pointNames=[...new Set(remoteArr.map(e=>e.device).filter(Boolean))];
+  setT('hub-splits-count', pointNames.length||'0');
+
+  // Build station groups
+  const bodyEl=document.getElementById('hub-results-body');
+  if(bodyEl){
+    if(!allFinish.length){
+      bodyEl.innerHTML=`<div class="empty" style="padding:30px 0;"><div class="ei">📡</div><p>No splits received yet — waiting for aid stations</p></div>`;
+    } else {
+      bodyEl.innerHTML=displayStations.map(station=>{
+        const stEntries=byStation[station]||[];
+        if(!stEntries.length) return '';
+        const rows=stEntries.map(e=>{
+          const r=runners.find(x=>baseBib(x.bib)===baseBib(e.bib));
+          const name=r?.name?`<span style="font-size:.72rem;color:var(--mut);margin-left:4px;">${esc(r.name)}</span>`:'';
+          const dist=r?.distance?`<span style="font-size:.6rem;background:var(--surf2);border-radius:3px;padding:1px 4px;margin-left:3px;">${esc(r.distance)}</span>`:'';
+          const status=r?.status?`<span style="font-size:.6rem;font-weight:700;color:${r.status==='DNF'?'var(--red)':'#8a6000'};margin-left:4px;">${r.status}</span>`:'';
+          const flag=e.hasFlag?`<span style="font-size:.7rem;margin-left:3px;" title="${esc(e.flagReason||'Flagged')}">⚠</span>`:'';
+          const safeUid=(e.uid||'').replace(/'/g,"\\'");
+          const safeStn=station.replace(/'/g,"\\'");
+          return `<div style="display:flex;align-items:center;padding:7px 0;border-bottom:1px solid var(--bdr2);gap:6px;cursor:pointer;" onclick="hubEntryDetail('${safeUid}','${safeStn}')">
+            <div style="font-family:'DM Mono',monospace;font-size:.72rem;font-weight:700;min-width:28px;color:var(--mut);">#${e.pos||'—'}</div>
+            <div style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:900;min-width:48px;">${esc(e.bib)}</div>
+            <div style="flex:1;min-width:0;">${name}${dist}${status}${flag}</div>
+            <div style="font-family:'DM Mono',monospace;font-size:.78rem;color:var(--acc);font-weight:700;flex-shrink:0;">${e.time||'—'}</div>
+          </div>`;
+        }).join('');
+        const isOwnStation=station===timingPoint;
+        const headerBg=isOwnStation?'#1a4a8a':'#2a6a2a';
+        return `<div style="margin-bottom:14px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;background:${headerBg};color:#fff;border-radius:7px 7px 0 0;padding:8px 12px;">
+            <div style="font-size:.72rem;font-weight:900;letter-spacing:1px;text-transform:uppercase;">📍 ${esc(station)}${isOwnStation?' · this hub':''}</div>
+            <div style="font-size:.68rem;opacity:.85;">${stEntries.length} recorded</div>
+          </div>
+          <div style="border:1px solid var(--bdr);border-top:none;border-radius:0 0 7px 7px;padding:0 12px;background:var(--surf);">
+            ${rows||'<div style="padding:10px 0;font-size:.72rem;color:var(--mut);">No entries yet</div>'}
+          </div>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // Still Out in Field section
+  const stillOutEl=document.getElementById('hub-still-out');
+  if(stillOutEl){
+    if(hubStationFilter==='field'||hubStationFilter==='all'){
+      if(stillOut.length){
+        // Find last seen station per runner
+        const lastSeen={};
+        allFinish.forEach(e=>{
+          const b=baseBib(e.bib);
+          const ts=e.timestamp||0;
+          if(!lastSeen[b]||ts>lastSeen[b].ts) lastSeen[b]={station:e.device||timingPoint,time:e.time,ts};
+        });
+        const rows=stillOut.map(r=>{
+          const ls=lastSeen[baseBib(r.bib)];
+          const lastInfo=ls
+            ?`<span style="font-size:.7rem;color:var(--mut);">Last seen: 📍 ${esc(ls.station)} @ ${ls.time}</span>`
+            :`<span style="font-size:.7rem;color:var(--mut);">Not yet recorded at any station</span>`;
+          const condBadge=r.conditions?`<span style="font-size:.6rem;background:#fff3e0;color:#8a4000;border-radius:3px;padding:1px 5px;margin-left:4px;">⚠ ${esc(r.conditions.substring(0,20))}${r.conditions.length>20?'…':''}</span>`:'';
+          return `<div style="display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr2);gap:6px;">
+            <div style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:900;min-width:52px;">${esc(r.bib)}</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:.8rem;font-weight:600;">${esc(r.name||'—')}${condBadge}</div>
+              <div>${lastInfo}</div>
+            </div>
+            ${r.distance?`<div style="font-size:.62rem;background:var(--surf2);border-radius:3px;padding:2px 5px;flex-shrink:0;">${esc(r.distance)}</div>`:''}
+          </div>`;
+        }).join('');
+        stillOutEl.innerHTML=`<div style="margin-top:8px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;background:#7a4a00;color:#fff;border-radius:7px 7px 0 0;padding:8px 12px;">
+            <div style="font-size:.72rem;font-weight:900;letter-spacing:1px;text-transform:uppercase;">⏳ Still Out in Field</div>
+            <div style="font-size:.68rem;opacity:.85;">${stillOut.length} runner${stillOut.length!==1?'s':''}</div>
+          </div>
+          <div style="border:1px solid var(--bdr);border-top:none;border-radius:0 0 7px 7px;padding:0 12px;background:var(--surf);">
+            ${rows}
+          </div>
+        </div>`;
+      } else if(runners.length){
+        stillOutEl.innerHTML=`<div style="text-align:center;padding:16px;font-size:.8rem;color:#1a7a3a;font-weight:700;">✅ All runners accounted for</div>`;
+      } else {
+        stillOutEl.innerHTML='';
+      }
+    } else {
+      stillOutEl.innerHTML='';
+    }
+  }
+
+  // Hub dsec: flags summary
+  const hubDsec=document.getElementById('hub-dsec');
+  if(hubDsec){
+    const flags=allFinish.filter(e=>e.hasFlag);
+    const flagHtml=flags.length?`<div class="dsec"><div class="dhd">⚠ Discrepancies (${flags.length})</div>${flags.map(e=>`<div class="di"><strong>BIB ${esc(e.bib)}</strong> · ${e.time} · ${esc(e.flagReason||'Flagged')} <span style="font-size:.7rem;color:var(--mut);">@ ${esc(e.device||timingPoint)}</span></div>`).join('')}</div>`:'';
+    hubDsec.innerHTML=flagHtml;
+  }
+}
+
+function hubEntryDetail(uid, station){
+  if(!uid) return;
+  const own=entries.find(e=>e.uid===uid);
+  if(own){ openEdit(uid); return; }
+  const remote=window._remoteSplits&&window._remoteSplits[uid];
+  if(remote){
+    const r=runners.find(x=>baseBib(x.bib)===baseBib(remote.bib));
+    const name=r?.name||'';
+    toast(`${esc(remote.bib)}${name?' — '+name:''} · #${remote.pos} @ ${remote.time} · ${esc(station)}`,'b');
+  }
 }
 
 function clearRemoteFlag(bib){
@@ -2989,7 +3222,7 @@ function triggerImportFile(){
         };
         saveStations();
       }
-      renderRunners(); renderReg(); renderStationsPanel();
+      renderRunners(); renderReg(); renderStationsPanel(); renderResults();
       closeOvl('ovl-station-import');
       toast(`✅ ${stationLabel}: ${newEntries} entries + ${updatedRunners} runner updates`,'g');
     }catch(ex){ err.textContent='❌ '+ex.message; }
@@ -3604,6 +3837,7 @@ function shareStartList(){
 
 function sf(f,el){
   filt=f;
+  hubStationFilter='all'; // reset station filter when switching main filter chips
   document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
   el.classList.add('active');
   renderResults();
