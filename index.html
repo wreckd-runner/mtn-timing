@@ -3535,6 +3535,17 @@ async function doHubRejoin(){
       return;
     }
 
+    // 4. If manifest found but stations list is empty, try timing_points for active stations
+    if(!storedStations.length){
+      const {data:tpRows}=await sbv.from('timing_points')
+        .select('point_name').eq('race_code',code).neq('device_id','hub-stations-manifest');
+      if(tpRows?.length){
+        // Build station list from live timing points (excluding hub row)
+        const names=[...new Set(tpRows.map(r=>r.point_name).filter(n=>n&&n!=='Hub'&&n!=='__retired__'))];
+        storedStations=names.map((name,i)=>({name,slug:name.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8),isFinish:false,order:i}));
+      }
+    }
+
     const raceName_=(raceRow?.name)||code;
     // Remove the prompt, show the rejoin dialog
     document.getElementById('hub-rejoin-prompt').remove();
@@ -4594,9 +4605,20 @@ function renderRunners(){
       || (r.wave||'').toLowerCase().includes(q)
       || (r.age||'').toLowerCase().includes(q);
   });
+  // On hub, finishes come from _remoteSplits (marshal stations) not local entries[]
+  const remoteFinsByBib={};
+  if(isHub){
+    Object.values(window._remoteSplits||{}).filter(e=>e.type==='finish').forEach(e=>{
+      const b=baseBib(e.bib);
+      if(!remoteFinsByBib[b]) remoteFinsByBib[b]=[];
+      remoteFinsByBib[b].push(e);
+    });
+  }
   // Filter chips
   shown=shown.filter(({r})=>{
-    const fins=entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(r.bib));
+    const localFins=entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(r.bib));
+    const remoteFins=remoteFinsByBib[baseBib(r.bib)]||[];
+    const fins=[...localFins,...remoteFins];
     const hasFin=fins.length>0;
     const grpCount=runners.filter(x=>baseBib(x.bib)===baseBib(r.bib)).length;
     if(rFilt==='pending')  return !hasFin && r.status!=='DNF' && r.status!=='DNS';
@@ -4609,7 +4631,9 @@ function renderRunners(){
   });
   if(!shown.length){list.innerHTML=`<div class="empty"><div class="ei">📋</div><p>${runners.length?'No match':'No runners loaded'}</p></div>`;return;}
   list.innerHTML=shown.map(({r,i})=>{
-    const fins=entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(r.bib));
+    const localFins=entries.filter(e=>e.type==='finish'&&baseBib(e.bib)===baseBib(r.bib));
+    const remoteFins=remoteFinsByBib[baseBib(r.bib)]||[];
+    const fins=[...localFins,...remoteFins];
     const grpCount=runners.filter(x=>baseBib(x.bib)===baseBib(r.bib)).length;
     const dupWarn=grpCount>2?`<div class="rc-al" style="color:var(--ora);border-color:var(--ora);background:rgba(192,92,0,.08);">⚠ ${grpCount} runners on this bib</div>`:'';
     const gLabel={M:'♂ M',F:'♀ F',MX:'⚡ Mixed',NB:'◈ NB'}[r.gender]||'';
