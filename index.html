@@ -2372,7 +2372,8 @@ function renderHubResults(){
     const seen=new Set();
     allFinish.forEach(e=>{ if(e.device) seen.add(e.device); });
     stationOrder=[...seen].sort();
-    if(!stationOrder.length) stationOrder=[timingPoint];
+    // Hub no longer has a timing role — don't show a 'Hub' card as a fallback station
+    if(!stationOrder.length) stationOrder=[];
   }
 
   // Group entries by station
@@ -2488,7 +2489,7 @@ function renderHubResults(){
         allFinish.forEach(e=>{
           const b=baseBib(e.bib);
           const ts=e.timestamp||0;
-          if(!lastSeen[b]||ts>lastSeen[b].ts) lastSeen[b]={station:e.device||timingPoint,time:e.time,ts};
+          if(!lastSeen[b]||ts>lastSeen[b].ts) lastSeen[b]={station:e.device||'unknown',time:e.time,ts};
         });
         const rows=stillOut.map(r=>{
           const ls=lastSeen[baseBib(r.bib)];
@@ -4932,8 +4933,8 @@ function onRemoteEntry(row){
     uid:row.uid, type:row.type, bib:row.bib, time:row.time,
     pos:row.pos, device:row.point_name, timestamp:row.timestamp,
   };
-  // Refresh runner cards so split times update
-  renderRunners(); renderReg();
+  // Refresh all hub views — results stats (Finished/Still Out), runner cards, reg
+  renderHubResults(); renderRunners(); renderReg();
   toast(`📡 ${row.point_name}: BIB ${row.bib} @ ${row.time}`,'b');
 }
 
