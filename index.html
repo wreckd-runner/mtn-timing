@@ -471,6 +471,22 @@ tbody tr.rdata:active{background:#f0f0ea;}
         </div>
       </div>
 
+      <!-- Online mode toggle — only relevant when a station code is set -->
+      <div id="marshal-online-section" style="display:none;background:#f0f7ff;border:1px solid #aac4e8;border-radius:8px;padding:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <div>
+            <div style="font-size:.78rem;font-weight:700;color:#1a4a8a;">📡 Push splits to hub live</div>
+            <div style="font-size:.65rem;color:#4a6080;margin-top:2px;line-height:1.4;">When enabled, finish times sync to the hub in real-time over Supabase. Disable for no-cell-coverage timing — export a JSON file at the end instead.</div>
+          </div>
+          <label style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;">
+            <input type="checkbox" id="marshal-online-toggle" checked style="opacity:0;width:0;height:0;">
+            <span onclick="document.getElementById('marshal-online-toggle').click()" style="position:absolute;cursor:pointer;inset:0;background:#aac4e8;border-radius:12px;transition:.2s;" id="marshal-online-pill"></span>
+            <span id="marshal-online-thumb" style="position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s;pointer-events:none;"></span>
+          </label>
+        </div>
+        <div id="marshal-online-label" style="font-size:.65rem;font-weight:700;text-align:right;margin-top:4px;color:#1a7a3a;">● Online mode</div>
+      </div>
+
       <button class="rbtn" onclick="completeMarshalSetup()" style="font-size:1rem;letter-spacing:1px;padding:14px;">Start Timing →</button>
       <div id="setup-err" style="color:var(--red);font-size:.72rem;text-align:center;min-height:16px;"></div>
 
@@ -717,6 +733,12 @@ tbody tr.rdata:active{background:#f0f0ea;}
         </div>
       </div>
 
+      <!-- Hub-only: live splits from online marshal stations -->
+      <div id="hub-splits-banner" style="display:none;background:#e8f4ff;border-bottom:1px solid #aac4e8;padding:8px 14px;font-size:.7rem;color:#1a4a8a;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <span>📡 Receiving live splits from aid stations — <span id="hub-splits-count">0</span> timing point(s) online</span>
+        <button onclick="supaPullRaceData()" style="font-size:.6rem;padding:3px 8px;background:#1a4a8a;color:#fff;border:none;border-radius:4px;cursor:pointer;">↻ Refresh</button>
+      </div>
+
       <!-- scrollable table -->
       <div class="sz">
         <div class="tw">
@@ -901,6 +923,14 @@ tbody tr.rdata:active{background:#f0f0ea;}
           <div id="dns-satellite-result" style="font-size:.72rem;color:var(--mut);margin-top:2px;min-height:14px;"></div>
         </div>
 
+        <!-- Pre-race: receive from hub -->
+        <div style="background:#e8f0ff;border:2px solid #1a4a8a;border-radius:10px;padding:12px;">
+          <div style="font-size:.7rem;font-weight:900;text-transform:uppercase;letter-spacing:1px;color:#1a3a7a;margin-bottom:6px;">📥 RECEIVE — Before the Race</div>
+          <div style="font-size:.72rem;color:#1a2a5a;margin-bottom:10px;line-height:1.4;">Pull the latest runner list and any updates from the hub. Do this while you still have reception — before you go off-grid.</div>
+          <button onclick="supaRefreshCache()" style="width:100%;padding:12px;background:#1a4a8a;color:#fff;border:none;border-radius:7px;font-weight:900;font-size:.82rem;cursor:pointer;letter-spacing:.5px;">📥 RECEIVE — Pull from Hub Now</button>
+          <div id="setup-last-pull" style="font-size:.68rem;color:#1a3a7a;text-align:center;margin-top:6px;min-height:14px;"></div>
+        </div>
+
         <!-- Export results -->
         <div style="background:var(--surf2);border:1px solid var(--bdr);border-radius:8px;padding:12px;">
           <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:6px;">End of Race</div>
@@ -917,7 +947,7 @@ tbody tr.rdata:active{background:#f0f0ea;}
   <div id="point-footer" onclick="openPointSettings()" style="flex-shrink:0;background:var(--surf2);border-top:2px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;padding:6px 14px;cursor:pointer;user-select:none;gap:8px;box-shadow:0 -1px 0 var(--btn-shadow);">
     <div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1;overflow:hidden;">
       <span style="font-size:.75rem;flex-shrink:0;">📍</span>
-      <span id="hdr-point-name" style="font-size:.72rem;font-weight:700;color:var(--acc);font-family:'DM Sans',sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></span><span id="hdr-hub-badge" style="display:none;font-size:.55rem;font-weight:700;background:var(--acc);color:#fff;border-radius:3px;padding:1px 5px;margin-left:5px;letter-spacing:.5px;">HUB</span>
+      <span id="hdr-point-name" style="font-size:.72rem;font-weight:700;color:var(--acc);font-family:'DM Sans',sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></span><span id="hdr-hub-badge" style="display:none;font-size:.55rem;font-weight:700;background:var(--acc);color:#fff;border-radius:3px;padding:1px 5px;margin-left:5px;letter-spacing:.5px;">HUB</span><span id="hdr-mode-badge" style="display:none;font-size:.55rem;font-weight:700;color:#fff;border-radius:3px;padding:1px 5px;margin-left:5px;letter-spacing:.5px;"></span>
       <span style="color:var(--bdr);flex-shrink:0;font-size:.8rem;">·</span>
       <span id="hdr-race-name" style="font-size:.65rem;color:var(--mut);font-family:'DM Sans',sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;"></span>
     </div>
@@ -994,13 +1024,12 @@ tbody tr.rdata:active{background:#f0f0ea;}
   </div>
 </div>
 
-<!-- SYNC MODAL -->
-<!-- NETWORK MODAL -->
+<!-- SYNC / NETWORK MODAL -->
 <div class="ovl center" id="ovl-sync" onclick="if(event.target===this)closeOvl('ovl-sync')">
-  <div class="sht" style="border-radius:12px;max-width:420px;max-height:90vh;">
+  <div class="sht" style="border-radius:12px;max-width:440px;max-height:92vh;">
     <div class="sht-t">📡 Network <button onclick="closeOvl('ovl-sync')">×</button></div>
 
-    <!-- Connection status -->
+    <!-- Connection status bar -->
     <div style="background:var(--bg);border:1px solid var(--bdr);border-radius:5px;padding:10px 12px;margin-bottom:12px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <span style="font-size:.72rem;font-weight:700;">Race Code</span>
@@ -1016,55 +1045,80 @@ tbody tr.rdata:active{background:#f0f0ea;}
       </div>
     </div>
 
-    <!-- Connected timing points -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);">Connected Timing Points</div>
-      <button id="clear-stale-btn" onclick="clearStalePoints()" style="display:none;font-size:.62rem;padding:3px 8px;background:none;border:1px solid #b06000;color:#b06000;border-radius:4px;cursor:pointer;">⏏ Clear stale</button>
-    </div>
-    <div id="net-points-list" style="display:flex;flex-direction:column;gap:5px;margin-bottom:12px;">
-      <div style="font-size:.75rem;color:var(--mut2);font-style:italic;">Loading…</div>
-    </div>
+    <!-- ══ HUB SECTION ══ -->
+    <div id="sync-hub-section" style="display:none;flex-direction:column;gap:10px;">
 
-    <!-- Hub-only actions -->
-    <div id="sync-hub-section" style="border-top:1px solid var(--bdr);padding-top:12px;display:none;flex-direction:column;gap:8px;">
-      <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:2px;">Hub Actions</div>
-      <button class="btn acc" onclick="supaManualSync()" style="width:100%;padding:10px;font-size:.78rem;">↑ Push Queued Data</button>
-      <button onclick="openImportGeneral()" style="width:100%;padding:10px;background:#0a2535;border:1px solid #4a9eff;color:#4a9eff;border-radius:6px;font-weight:700;font-size:.78rem;cursor:pointer;">📥 Import Marshal Results</button>
-      <!-- Preflight — hub pushes its runner list to cloud for marshals to pull; or pulls a list built on another device pre-race -->
-      <div style="background:rgba(30,120,200,.06);border:1px solid var(--tel);border-radius:6px;padding:10px;display:flex;flex-direction:column;gap:6px;">
-        <div style="font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--tel);">🛫 Start List — Cloud Sync</div>
-        <button onclick="preflightPush()" id="preflight-push-btn" style="width:100%;padding:8px;background:var(--tel);color:#fff;border:none;border-radius:5px;font-weight:700;font-size:.75rem;cursor:pointer;">☁ Push Start List to Cloud</button>
-        <button onclick="preflightPull()" style="width:100%;padding:8px;background:rgba(30,120,200,.1);border:1px solid var(--tel);color:var(--tel);border-radius:5px;font-weight:700;font-size:.75rem;cursor:pointer;">⬇ Pull Start List from Cloud</button>
-        <div id="preflight-pull-status" style="font-size:.68rem;color:var(--mut);text-align:center;min-height:12px;"></div>
-        <div id="preflight-push-status" style="font-size:.68rem;color:var(--mut);text-align:center;min-height:12px;"></div>
-      </div>
-      <div id="net-queue-status" style="font-size:.68rem;color:var(--mut);text-align:center;"></div>
-    </div>
-
-    <!-- Refresh from network -->
-    <div style="border-top:1px solid var(--bdr);padding-top:12px;display:flex;flex-direction:column;gap:6px;">
-      <div style="font-size:.7rem;color:var(--mut);margin-bottom:2px;" id="sync-refresh-desc">Re-pull runner and split data from the hub.</div>
-      <div id="sync-offline-warn" style="display:none;background:#f5eecf;border:1px solid #c0a040;border-radius:5px;padding:8px;font-size:.72rem;color:#6a4000;">⚠ No reception — network refresh unavailable. You're running fully offline.</div>
-      <button class="btn" onclick="supaRefreshCache()" id="sync-refresh-btn" style="width:100%;padding:10px;font-size:.78rem;">🔄 Refresh from Network</button>
-    </div>
-
-    <!-- Marshal-only: fresh start -->
-    <div id="marshal-fresh-start" style="border-top:1px solid var(--bdr2);padding-top:8px;display:none;">
-      <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Need a completely fresh start? This clears your entries and disconnects from the current race. <strong>Does not affect the hub or other devices.</strong></div>
-      <div id="fresh-start-confirm" style="display:none;background:#f5dede;border:1px solid #b02020;border-radius:5px;padding:10px;margin-bottom:6px;">
-        <div style="font-size:.75rem;font-weight:700;color:#901818;margin-bottom:8px;">⚠ Are you sure? This cannot be undone.</div>
+      <!-- HUB → SEND -->
+      <div style="background:#e8f5ec;border:2px solid #1a7a3a;border-radius:10px;padding:12px;">
+        <div style="font-size:.7rem;font-weight:900;text-transform:uppercase;letter-spacing:1px;color:#1a5a2a;margin-bottom:6px;">📤 SEND — Push to All Aid Stations</div>
+        <div style="font-size:.72rem;color:#1a3a2a;margin-bottom:10px;line-height:1.4;">Push the runner list (and DNS/DNF statuses) to all aid stations so they have the latest data. Do this before the race starts and after any changes.</div>
+        <button onclick="hubPushRunners()" style="width:100%;padding:12px;background:#1a7a3a;color:#fff;border:none;border-radius:7px;font-weight:900;font-size:.82rem;cursor:pointer;letter-spacing:.5px;">📤 SEND — Push Runners to Aid Stations</button>
+        <div id="hub-push-status" style="font-size:.68rem;color:#1a5a2a;text-align:center;margin-top:6px;min-height:14px;"></div>
+        <div style="border-top:1px solid #a0d0b0;margin:10px 0;"></div>
+        <!-- Start list cloud sync (preflight) -->
+        <div style="font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#1a7a3a;margin-bottom:6px;">☁ Start List Cloud Sync</div>
         <div style="display:flex;gap:6px;">
-          <button class="btn" onclick="document.getElementById('fresh-start-confirm').style.display='none';document.getElementById('fresh-start-btn').style.display='block';" style="flex:1;padding:8px;">Cancel</button>
-          <button class="btn red" onclick="marshalFreshStart()" style="flex:1;padding:8px;background:#b02020;color:#fff;">Yes, Fresh Start</button>
+          <button onclick="preflightPush()" id="preflight-push-btn" style="flex:1;padding:8px;background:#1a7a3a;color:#fff;border:none;border-radius:5px;font-weight:700;font-size:.72rem;cursor:pointer;">☁ Push Start List</button>
+          <button onclick="supaManualSync()" style="flex:1;padding:8px;background:rgba(26,122,58,.12);border:1px solid #1a7a3a;color:#1a5a2a;border-radius:5px;font-weight:700;font-size:.72rem;cursor:pointer;">↑ Flush Queue</button>
         </div>
+        <div id="net-queue-status" style="font-size:.65rem;color:#1a5a2a;text-align:center;margin-top:4px;min-height:12px;"></div>
+        <div id="preflight-push-status" style="font-size:.65rem;color:#1a5a2a;text-align:center;min-height:12px;"></div>
       </div>
-      <button class="btn red" id="fresh-start-btn" onclick="document.getElementById('fresh-start-confirm').style.display='block';this.style.display='none';" style="width:100%;padding:10px;font-size:.78rem;">↺ Fresh Start (this device only)</button>
+
+      <!-- HUB → RECEIVE -->
+      <div style="background:#e8f0ff;border:2px solid #1a4a8a;border-radius:10px;padding:12px;">
+        <div style="font-size:.7rem;font-weight:900;text-transform:uppercase;letter-spacing:1px;color:#1a3a7a;margin-bottom:6px;">📥 RECEIVE — Pull from Aid Stations</div>
+        <div style="font-size:.72rem;color:#1a2a5a;margin-bottom:10px;line-height:1.4;">Pull incoming splits and runner updates from all aid stations. Live splits arrive automatically — use this to force a refresh.</div>
+        <button onclick="supaRefreshCache()" id="sync-refresh-btn" style="width:100%;padding:12px;background:#1a4a8a;color:#fff;border:none;border-radius:7px;font-weight:900;font-size:.82rem;cursor:pointer;letter-spacing:.5px;">📥 RECEIVE — Pull All Data Now</button>
+        <div id="sync-offline-warn" style="display:none;background:#f5eecf;border:1px solid #c0a040;border-radius:5px;padding:8px;font-size:.72rem;color:#6a4000;margin-top:6px;">⚠ No reception — network refresh unavailable.</div>
+        <div style="border-top:1px solid #a0b8d8;margin:10px 0;"></div>
+        <button onclick="openImportGeneral()" style="width:100%;padding:9px;background:rgba(26,74,138,.1);border:1px solid #1a4a8a;color:#1a3a7a;border-radius:6px;font-weight:700;font-size:.75rem;cursor:pointer;">📂 Import Offline Marshal Results (JSON)</button>
+        <button onclick="preflightPull()" style="width:100%;padding:9px;margin-top:6px;background:rgba(26,74,138,.1);border:1px solid #1a4a8a;color:#1a3a7a;border-radius:5px;font-weight:700;font-size:.75rem;cursor:pointer;">⬇ Pull Start List from Cloud</button>
+        <div id="preflight-pull-status" style="font-size:.65rem;color:#1a3a7a;text-align:center;min-height:12px;margin-top:4px;"></div>
+      </div>
+
+      <!-- Hub: clear entries -->
+      <div id="reg-clear-section" style="display:none;background:#fdf0f0;border:1px solid #c08080;border-radius:8px;padding:10px;">
+        <div style="font-size:.7rem;color:#701818;margin-bottom:6px;">Clear your own timing entries for this race. Does not affect other devices or runners.</div>
+        <button class="btn red" onclick="confirmClearEntries()" style="width:100%;padding:10px;font-size:.78rem;">🗑 Clear My Entries</button>
+      </div>
     </div>
 
-    <!-- Hub: clear entries -->
-    <div id="reg-clear-section" style="border-top:1px solid var(--bdr2);padding-top:8px;display:none;">
-      <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Clear your own timing entries for this race. Does not affect other devices or runners.</div>
-      <button class="btn red" onclick="confirmClearEntries()" style="width:100%;padding:10px;font-size:.78rem;">🗑 Clear My Entries</button>
+    <!-- ══ MARSHAL SECTION ══ -->
+    <div id="sync-marshal-section" style="display:none;flex-direction:column;gap:10px;">
+
+      <!-- MARSHAL → RECEIVE -->
+      <div style="background:#e8f0ff;border:2px solid #1a4a8a;border-radius:10px;padding:12px;">
+        <div style="font-size:.7rem;font-weight:900;text-transform:uppercase;letter-spacing:1px;color:#1a3a7a;margin-bottom:6px;">📥 RECEIVE — Pull from Hub</div>
+        <div style="font-size:.72rem;color:#1a2a5a;margin-bottom:10px;line-height:1.4;">Pull the latest runner list and updates from the hub. Do this while you have reception — before the race starts.</div>
+        <button onclick="supaRefreshCache()" id="sync-refresh-btn-marshal" style="width:100%;padding:12px;background:#1a4a8a;color:#fff;border:none;border-radius:7px;font-weight:900;font-size:.82rem;cursor:pointer;letter-spacing:.5px;">📥 RECEIVE — Pull from Hub Now</button>
+        <div id="sync-offline-warn-marshal" style="display:none;background:#f5eecf;border:1px solid #c0a040;border-radius:5px;padding:8px;font-size:.72rem;color:#6a4000;margin-top:6px;">⚠ No reception — cannot pull right now.</div>
+      </div>
+
+      <!-- Marshal-only: fresh start -->
+      <div id="marshal-fresh-start" style="background:#fdf0f0;border:1px solid #c08080;border-radius:8px;padding:10px;">
+        <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#901818;margin-bottom:5px;">↺ Fresh Start</div>
+        <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Clears your entries and disconnects from the race. <strong>Does not affect the hub or other devices.</strong></div>
+        <div id="fresh-start-confirm" style="display:none;background:#f5dede;border:1px solid #b02020;border-radius:5px;padding:10px;margin-bottom:6px;">
+          <div style="font-size:.75rem;font-weight:700;color:#901818;margin-bottom:8px;">⚠ Are you sure? This cannot be undone.</div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn" onclick="document.getElementById('fresh-start-confirm').style.display='none';document.getElementById('fresh-start-btn').style.display='block';" style="flex:1;padding:8px;">Cancel</button>
+            <button class="btn red" onclick="marshalFreshStart()" style="flex:1;padding:8px;background:#b02020;color:#fff;">Yes, Fresh Start</button>
+          </div>
+        </div>
+        <button class="btn red" id="fresh-start-btn" onclick="document.getElementById('fresh-start-confirm').style.display='block';this.style.display='none';" style="width:100%;padding:10px;font-size:.78rem;">↺ Fresh Start (this device only)</button>
+      </div>
+    </div>
+
+    <!-- Connected timing points (always visible) -->
+    <div style="border-top:1px solid var(--bdr);padding-top:10px;margin-top:4px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--mut);">Connected Timing Points</div>
+        <button id="clear-stale-btn" onclick="clearStalePoints()" style="display:none;font-size:.62rem;padding:3px 8px;background:none;border:1px solid #b06000;color:#b06000;border-radius:4px;cursor:pointer;">⏏ Clear stale</button>
+      </div>
+      <div id="net-points-list" style="display:flex;flex-direction:column;gap:5px;margin-bottom:4px;">
+        <div style="font-size:.75rem;color:var(--mut2);font-style:italic;">Loading…</div>
+      </div>
     </div>
 
     <!-- Full system reset (always available) -->
@@ -1381,14 +1435,14 @@ const SUPA_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 let supa=null, raceCode='', supaReady=false;
 let _realtimeSub=null, _uploadQueue=[], _uploading=false;
 // ── App state ─────────────────────────────────────────────────────────────
-let timingPoint='', raceName='', isHub=false;
+let timingPoint='', raceName='', isHub=false, marshalOnline=false;
 let lastSyncId='', deviceId='';
 let entries=[], runners=[], bib='', filt='all', rFilt='all', editTags=[];
 
 function load(){
   try{entries=JSON.parse(localStorage.getItem(SK_E))||[];}catch{entries=[];}
   try{runners=JSON.parse(localStorage.getItem(SK_R))||[];}catch{runners=[];}
-  try{const p=JSON.parse(localStorage.getItem(SK_P))||{}; timingPoint=p.point||''; raceName=p.race||''; isHub=p.isHub||false; raceCode=p.raceCode||'';}catch{timingPoint='';raceName='';isHub=false;raceCode='';}
+  try{const p=JSON.parse(localStorage.getItem(SK_P))||{}; timingPoint=p.point||''; raceName=p.race||''; isHub=p.isHub||false; marshalOnline=p.marshalOnline||false; raceCode=p.raceCode||'';}catch{timingPoint='';raceName='';isHub=false;marshalOnline=false;raceCode='';}
   try{const s=JSON.parse(localStorage.getItem(SK_SYNC))||{}; lastSyncId=s.lastSyncId||''; deviceId=s.deviceId||(Date.now().toString(36));}catch{deviceId=Date.now().toString(36);}
   localStorage.setItem(SK_SYNC,JSON.stringify({lastSyncId,deviceId}));
   entries.forEach(e=>{
@@ -1412,8 +1466,8 @@ function load(){
 }
 const saveE=(skipQueue=false)=>{
   localStorage.setItem(SK_E,JSON.stringify(entries));
-  // Only hub writes entries to Supabase — marshals are fully offline
-  if(!skipQueue&&raceCode&&isHub){
+  // Hub or online-mode marshal writes entries to Supabase
+  if(!skipQueue&&raceCode&&(isHub||marshalOnline)){
     entries.filter(e=>!e._synced&&(e.device||timingPoint)===timingPoint).forEach(e=>{
       supaQueueEntry(e); e._synced=true;
     });
@@ -1421,7 +1475,7 @@ const saveE=(skipQueue=false)=>{
 };
 const saveR=(skipQueue=false)=>{
   localStorage.setItem(SK_R,JSON.stringify(runners));
-  // Only hub writes runners to Supabase — marshals never write
+  // Only hub writes runners to Supabase — marshals never write runner data
   if(!skipQueue&&raceCode&&isHub){
     runners.forEach(r=>supaQueueRunner(r));
   }
@@ -2486,6 +2540,26 @@ function toggleMarshalManual(){
   document.getElementById('marshal-manual-toggle').textContent=_marshalManualMode?'Hide manual entry':'No station code — enter manually';
 }
 
+function updateMarshalOnlineToggleUI(){
+  const cb=document.getElementById('marshal-online-toggle');
+  const pill=document.getElementById('marshal-online-pill');
+  const thumb=document.getElementById('marshal-online-thumb');
+  const label=document.getElementById('marshal-online-label');
+  if(!cb) return;
+  const on=cb.checked;
+  if(pill){ pill.style.background=on?'#1a7a3a':'#aac4e8'; }
+  if(thumb){ thumb.style.left=on?'23px':'3px'; }
+  if(label){ label.textContent=on?'● Online mode — syncing to hub':'○ Offline mode — local only'; label.style.color=on?'#1a7a3a':'#8a4000'; }
+}
+// Wire toggle visual on change
+(function(){
+  document.addEventListener('DOMContentLoaded',()=>{
+    const cb=document.getElementById('marshal-online-toggle');
+    if(cb) cb.addEventListener('change', updateMarshalOnlineToggleUI);
+    updateMarshalOnlineToggleUI();
+  });
+})();
+
 function parseMarshalCode(val){
   // Station code format: RACE-POINT  e.g. MKA-001-Start or MKA-001-KM10
   // Race code is always first two segments (ABC-123), point is remainder
@@ -2494,18 +2568,22 @@ function parseMarshalCode(val){
   const parsedEl=document.getElementById('marshal-parsed');
   const parsedRace=document.getElementById('marshal-parsed-race');
   const parsedPoint=document.getElementById('marshal-parsed-point');
+  const onlineSection=document.getElementById('marshal-online-section');
   if(parts.length>=3){
     const rc=parts[0]+'-'+parts[1];
     const pt=parts.slice(2).join(' ');
     parsedRace.textContent=rc;
     parsedPoint.textContent=pt||'—';
     parsedEl.style.display='block';
+    if(onlineSection) onlineSection.style.display='block';
   } else {
     parsedEl.style.display='none';
+    if(onlineSection) onlineSection.style.display='none';
   }
+  updateMarshalOnlineToggleUI();
 }
 
-function completeMarshalSetup(){
+async function completeMarshalSetup(){
   const err=document.getElementById('setup-err');
   err.textContent='';
   let point='', newCode='', race='';
@@ -2530,7 +2608,32 @@ function completeMarshalSetup(){
     race='';
   }
 
-  _finishSetup({race:race||'Race', point, newCode, hub:false});
+  const onlineMarshal=document.getElementById('marshal-online-toggle')?.checked&&!!newCode;
+
+  // If online, check Supabase for a conflicting device at this exact station code
+  if(newCode && navigator.onLine){
+    try{
+      const sb=supa||(window.supabase?.createClient?.(SUPA_URL,SUPA_KEY));
+      if(sb){
+        err.textContent='⏳ Checking for conflicts…';
+        const {data:pts}=await sb.from('timing_points').select('device_id,point_name,is_hub,last_seen')
+          .eq('race_code',newCode).eq('point_name',point);
+        if(pts&&pts.length){
+          const conflict=pts.find(p=>p.device_id!==deviceId);
+          if(conflict){
+            const ago=Math.floor((Date.now()-new Date(conflict.last_seen).getTime())/60000);
+            if(ago<20){
+              err.textContent=`⚠ Station "${point}" is already active on another device (last seen ${ago}m ago). Use a different station name, or wait 20 minutes for it to expire.`;
+              return;
+            }
+          }
+        }
+        err.textContent='';
+      }
+    }catch(e){ err.textContent=''; /* offline or error — allow through */ }
+  }
+
+  _finishSetup({race:race||'Race', point, newCode, hub:false, onlineMarshal});
 }
 
 // ── Admin / Hub flow ──────────────────────────────────────────────────────
@@ -2929,9 +3032,10 @@ function completeAdminSetup(){
 }
 
 // ── Shared setup completion ───────────────────────────────────────────────
-function _finishSetup({race,point,newCode,hub}){
+function _finishSetup({race,point,newCode,hub,onlineMarshal}){
   const codeChanged=newCode&&newCode!==raceCode;
   raceName=race||'Race'; timingPoint=point; isHub=hub;
+  marshalOnline=!hub&&!!onlineMarshal;
   if(codeChanged){
     clearSessionData();
     raceCode=newCode;
@@ -2939,14 +3043,21 @@ function _finishSetup({race,point,newCode,hub}){
   } else {
     raceCode=newCode;
   }
-  localStorage.setItem(SK_P,JSON.stringify({race:raceName,point:timingPoint,isHub,raceCode}));
+  localStorage.setItem(SK_P,JSON.stringify({race:raceName,point:timingPoint,isHub,marshalOnline,raceCode}));
   if(isHub&&raceCode){
     initSupabase();
     setTimeout(async()=>{
       await enforceOneHub();
       supaPullRaceData();
     },1200);
-  } else if(!isHub&&raceCode){
+  } else if(!isHub&&raceCode&&marshalOnline){
+    // Online marshal — connect to push entries and pull runner list
+    initSupabase();
+    setTimeout(()=>{
+      supaPullRaceData();
+    },1200);
+  } else if(!isHub&&raceCode&&!marshalOnline){
+    // Offline marshal — still pull runner list once if online, then go dark
     initSupabase();
     setTimeout(()=>{
       supaPullRaceData();
@@ -2956,7 +3067,10 @@ function _finishSetup({race,point,newCode,hub}){
   document.getElementById('setup-screen').style.display='none';
   document.getElementById('app').style.visibility='visible';
   updateHdrPoint();
-  toast(`✅ ${timingPoint} ${isHub?'(HUB)':'(Marshal)'} ready`,'g');
+  // Hub defaults to Results (splits view); marshals default to Entry (timing)
+  if(isHub) go('results');
+  const modeLabel=isHub?'Hub — registration & splits view':(marshalOnline?'Online timing point':'Offline timing point');
+  toast(`✅ ${timingPoint} — ${modeLabel} ready`,'g');
 }
 
 // Keep for backward compat (called from old hub toggle path)
@@ -2992,6 +3106,37 @@ function updateHdrPoint(){
   // Marshals have no Reg tab
   const regTab=document.getElementById('tab-reg');
   if(regTab) regTab.style.display=isHub?'flex':'none';
+  // Hub is registration+splits only — hide the timing Entry tab
+  const entryTab=document.getElementById('tab-entry');
+  if(entryTab) entryTab.style.display=isHub?'none':'flex';
+  // If hub is on Entry panel, redirect to Results (splits)
+  if(isHub){
+    const entryPanel=document.getElementById('panel-entry');
+    if(entryPanel&&entryPanel.classList.contains('active')) go('results');
+  }
+  // Show online/offline mode badge in header for marshals
+  const modeBadge=document.getElementById('hdr-mode-badge');
+  if(modeBadge){
+    if(isHub){ modeBadge.style.display='none'; }
+    else {
+      modeBadge.style.display='inline';
+      modeBadge.textContent=marshalOnline?'📡 Online':'📴 Offline';
+      modeBadge.style.background=marshalOnline?'#1a7a3a':'#8a4000';
+    }
+  }
+  // Hub: show/update splits banner
+  const splitsBanner=document.getElementById('hub-splits-banner');
+  if(splitsBanner){
+    if(isHub){
+      const remoteCount=Object.values(window._remoteSplits||{}).length;
+      const pointNames=[...new Set(Object.values(window._remoteSplits||{}).map(e=>e.device).filter(Boolean))];
+      splitsBanner.style.display='flex';
+      const countEl=document.getElementById('hub-splits-count');
+      if(countEl) countEl.textContent=pointNames.length||'0';
+    } else {
+      splitsBanner.style.display='none';
+    }
+  }
   // Runners panel: hub gets Add/Reset + CSV; marshals get read-only notice
   const hubBtns=document.getElementById('runners-hub-btns');
   if(hubBtns) hubBtns.style.display=isHub?'flex':'none';
@@ -3736,18 +3881,20 @@ function addRunnerTagQuick(tag){
     if(runners[i].status==='DNF'){toast('Already marked DNF','');return;}
     runners[i].status='DNF';
     appendChangeLog(runners[i], 'Marked DNF');
-    saveR(); renderRunners(); renderReg(); updBadge();
+    isHub ? saveR() : saveR(true);
+    renderRunners(); renderReg(); updBadge();
     renderRunnerTagsCurrent(i);
-    toast('❌ DNF recorded','r');
+    toast(isHub?'❌ DNF recorded':'❌ DNF recorded (local only — report to hub)','r');
     return;
   }
   if(/\bDNS\b/i.test(tag)){
     if(runners[i].status==='DNS'){toast('Already marked DNS','');return;}
     runners[i].status='DNS';
     appendChangeLog(runners[i], 'Marked DNS');
-    saveR(); renderRunners(); renderReg(); updBadge();
+    isHub ? saveR() : saveR(true);
+    renderRunners(); renderReg(); updBadge();
     renderRunnerTagsCurrent(i);
-    toast('🚫 DNS recorded','y');
+    toast(isHub?'🚫 DNS recorded':'🚫 DNS recorded (local only — report to hub)','y');
     return;
   }
   if(runners[i].runnerTags.includes(tag)){
@@ -3815,8 +3962,13 @@ function setRunnerStatus(i,status){
       saveE();
     }
   }
-  saveR(); renderRunners(); renderReg(); renderResults(); updBadge();
-  toast(runners[i].status ? `${status==='DNF'?'❌':'🚫'} ${r.name||'BIB '+r.bib} marked ${status}` : 'Status cleared','y');
+  isHub ? saveR() : saveR(true);
+  renderRunners(); renderReg(); renderResults(); updBadge();
+  if(isHub){
+    toast(runners[i].status ? `${status==='DNF'?'❌':'🚫'} ${r.name||'BIB '+r.bib} marked ${status}` : 'Status cleared','y');
+  } else {
+    toast(runners[i].status ? `${status==='DNF'?'❌':'🚫'} ${r.name||'BIB '+r.bib} marked ${status} (local only — report to hub)` : 'Status cleared (local)','y');
+  }
 }
 function delRunner(i){
   runners.splice(i,1); saveR(); renderRunners(); renderReg(); renderResults(); updBadge(); toast('Runner removed','y');
@@ -4267,8 +4419,8 @@ function showDNFConflictAlert(bib, name){
   if(!bar||!msg) return;
   msg.textContent=`Marshal reported DNF for BIB ${bib} (${name}) — but a finish is recorded. Check Results → Flags.`;
   bar.style.display='flex';
-  // Switch to entry tab so it's visible
-  go('entry');
+  // Switch to results tab so it's visible (hub has no entry tab)
+  go(isHub?'results':'entry');
 }
 function dismissDNFAlert(){
   const bar=document.getElementById('dnf-alert-bar');
@@ -4281,7 +4433,24 @@ function onRemoteEntry(row){
   // Store in separate splits store — never in entries[]
   if(!window._remoteSplits) window._remoteSplits={};
   const key=row.uid;
-  if(window._remoteSplits[key]) return; // already have it
+  if(window._remoteSplits[key]) return; // already have it (exact uid)
+
+  // Station pooling dedup: for finish entries, keep only the EARLIEST timestamp per bib per station
+  if(row.type==='finish'&&row.bib&&row.point_name){
+    const incomingTs=row.timestamp||Date.now();
+    // Find any existing record for same bib + same station
+    const existingKey=Object.keys(window._remoteSplits).find(k=>{
+      const e=window._remoteSplits[k];
+      return e.type==='finish' && e.bib===row.bib && e.device===row.point_name;
+    });
+    if(existingKey){
+      const existingTs=window._remoteSplits[existingKey].timestamp||0;
+      if(incomingTs >= existingTs) return; // existing is earlier or same — discard incoming
+      // Incoming is earlier — replace the existing record
+      delete window._remoteSplits[existingKey];
+    }
+  }
+
   window._remoteSplits[key]={
     uid:row.uid, type:row.type, bib:row.bib, time:row.time,
     pos:row.pos, device:row.point_name, timestamp:row.timestamp,
@@ -4450,6 +4619,7 @@ function syncRaceCode(){
 // ── Pull existing race data when marshals join ────────────────────────────
 async function supaPullRaceData(){
   if(!supa||!raceCode) return;
+  localStorage.setItem('mtn_last_pull', Date.now().toString());
   // Pull runners (participant list from hub)
   const {data:rData}=await supa.from('runners').select('*').eq('race_code',raceCode);
   if(rData?.length){
@@ -4512,31 +4682,56 @@ function openSyncModal(){
   document.getElementById('net-status-label').textContent = supaReady ? '● Live' : '○ Offline';
   document.getElementById('net-status-label').style.color = supaReady ? '#1a7a3a' : 'var(--mut)';
 
-  // Hub-only section
-  const hubSec=document.getElementById('sync-hub-section');
-  if(hubSec) hubSec.style.display=isHub?'flex':'none';
-  const qLen = _uploadQueue.length;
-  const qEl=document.getElementById('net-queue-status');
-  if(qEl) qEl.textContent = qLen ? `${qLen} item${qLen!==1?'s':''} queued` : 'All synced';
+  const online = navigator.onLine && supaReady;
 
-  // Hub: entries clear
-  const clearSec=document.getElementById('reg-clear-section');
-  if(clearSec) clearSec.style.display=isHub&&entries.length?'block':'none';
+  if(isHub){
+    // Show hub section, hide marshal section
+    const hubSec=document.getElementById('sync-hub-section');
+    if(hubSec) hubSec.style.display='flex';
+    const marshalSec=document.getElementById('sync-marshal-section');
+    if(marshalSec) marshalSec.style.display='none';
 
-  // Marshal-only: fresh start
-  const freshSec=document.getElementById('marshal-fresh-start');
-  if(freshSec) freshSec.style.display=!isHub?'block':'none';
+    // Queue status
+    const qLen=_uploadQueue.length;
+    const qEl=document.getElementById('net-queue-status');
+    if(qEl) qEl.textContent=qLen?`${qLen} item${qLen!==1?'s':''} queued`:'All synced';
 
-  // Refresh button — only enabled when online
-  const refreshBtn=document.getElementById('sync-refresh-btn');
-  const offlineWarn=document.getElementById('sync-offline-warn');
-  const refreshDesc=document.getElementById('sync-refresh-desc');
-  if(refreshBtn){
-    const online=navigator.onLine&&supaReady;
-    refreshBtn.disabled=!online;
-    refreshBtn.style.opacity=online?'1':'0.45';
+    // Hub: entries clear section
+    const clearSec=document.getElementById('reg-clear-section');
+    if(clearSec) clearSec.style.display=entries.length?'block':'none';
+
+    // Hub RECEIVE button state
+    const refreshBtn=document.getElementById('sync-refresh-btn');
+    const offlineWarn=document.getElementById('sync-offline-warn');
+    if(refreshBtn){ refreshBtn.disabled=!online; refreshBtn.style.opacity=online?'1':'0.45'; }
     if(offlineWarn) offlineWarn.style.display=online?'none':'block';
-    if(refreshDesc) refreshDesc.style.display=online?'block':'none';
+
+    // Hub push button state
+    const pushBtn=document.querySelector('#sync-hub-section button[onclick="hubPushRunners()"]');
+    if(pushBtn){ pushBtn.disabled=!online; pushBtn.style.opacity=online?'1':'0.45'; }
+
+    // Clear hub-push-status if stale
+    const pushStatus=document.getElementById('hub-push-status');
+    if(pushStatus&&!pushStatus.textContent) pushStatus.textContent='';
+
+  } else {
+    // Show marshal section, hide hub section
+    const hubSec=document.getElementById('sync-hub-section');
+    if(hubSec) hubSec.style.display='none';
+    const marshalSec=document.getElementById('sync-marshal-section');
+    if(marshalSec) marshalSec.style.display='flex';
+
+    // Marshal RECEIVE button state
+    const refreshBtn=document.getElementById('sync-refresh-btn-marshal');
+    const offlineWarn=document.getElementById('sync-offline-warn-marshal');
+    if(refreshBtn){ refreshBtn.disabled=!online; refreshBtn.style.opacity=online?'1':'0.45'; }
+    if(offlineWarn) offlineWarn.style.display=online?'none':'block';
+
+    // Reset fresh-start confirm state
+    const fsc=document.getElementById('fresh-start-confirm');
+    const fsb=document.getElementById('fresh-start-btn');
+    if(fsc) fsc.style.display='none';
+    if(fsb) fsb.style.display='block';
   }
 
   loadConnectedPoints();
@@ -4615,11 +4810,15 @@ async function supaRefreshCache(){
     if(!confirm(`You have ${localChanges} runner${localChanges!==1?'s':''} with local check-in or status changes.\n\nRefreshing will add new runner data from the network but will NOT overwrite check-ins or statuses you've set. Continue?`)) return;
   }
   window._remoteSplits={};
-  const btn=event.target; btn.disabled=true; btn.textContent='🔄 Refreshing…';
+  const btn=event?.target;
+  if(btn){ btn.disabled=true; btn.textContent='📥 Pulling…'; }
   await supaPullRaceData();
-  btn.disabled=false; btn.textContent='🔄 Refresh from Network';
+  if(btn){ btn.disabled=false; btn.textContent=btn.id==='sync-refresh-btn-marshal'?'📥 RECEIVE — Pull from Hub Now': btn.id==='sync-refresh-btn'?'📥 RECEIVE — Pull All Data Now':'📥 Pull from Hub Now'; }
   toast('✅ Refreshed from network','g');
-  loadConnectedPoints();
+  // Update setup panel pull label
+  const slp=document.getElementById('setup-last-pull');
+  if(slp) slp.textContent=`✅ Pulled at ${new Date().toLocaleTimeString()}`;
+  if(!isHub) loadConnectedPoints && loadConnectedPoints();
 }
 
 function confirmClearEntries(){
@@ -4822,10 +5021,32 @@ async function supaManualSync(){
     runners.forEach(r=>supaQueueRunner(r));
   }
   await supaFlushQueue();
-  btn.disabled = false; btn.textContent = '↑ Push Queued Data to Network';
+  btn.disabled = false; btn.textContent = '↑ Flush Queue';
   const qLen = _uploadQueue.length;
   statusEl.textContent = qLen ? `⚠ ${qLen} items still queued — check connection` : '✅ All data synced';
   loadConnectedPoints();
+}
+
+async function hubPushRunners(){
+  if(!isHub){toast('Hub only','r');return;}
+  if(!supa||!raceCode){toast('Not connected — cannot push','r');return;}
+  const statusEl=document.getElementById('hub-push-status');
+  const btn=event?.target;
+  if(btn){ btn.disabled=true; btn.textContent='📤 Pushing…'; }
+  if(statusEl) statusEl.textContent='Pushing runners to cloud…';
+  try{
+    runners.forEach(r=>supaQueueRunner(r));
+    await supaFlushQueue();
+    const pushMsg=`✅ ${runners.length} runner${runners.length!==1?'s':''} pushed to all stations`;
+    if(statusEl) statusEl.textContent=pushMsg;
+    toast(`📤 ${runners.length} runner${runners.length!==1?'s':''} pushed to all stations`,'g');
+    localStorage.setItem('mtn_last_push', Date.now().toString());
+  }catch(e){
+    if(statusEl) statusEl.textContent='⚠ Push failed — check connection';
+    toast('Push failed','r');
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='📤 SEND — Push Runners to Aid Stations'; }
+  }
 }
 
 // ── POINT FILTER CHIPS ────────────────────────────────────────────────────
