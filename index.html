@@ -576,7 +576,7 @@ tbody tr.rdata:active{background:#f0f0ea;}
         <span class="subhead">Mountain Time Node</span>
       </div>
     </div>
-    <span id="supa-status" style="font-size:.6rem;font-family:'DM Mono',monospace;color:var(--mut);display:none;cursor:pointer;" onclick="if(raceCode){if(!supa||!supaReady){initSupabase();toast('↻ Reconnecting…','b');}else{supaPullRaceData();toast('↻ Pulling…','b');}}" title="Tap to reconnect or pull latest data"></span>
+    <span id="supa-status" style="font-size:.6rem;font-family:'DM Mono',monospace;color:var(--mut);display:none;cursor:pointer;" onclick="if(raceCode){if(!supa){initSupabase();toast('↻ Reconnecting…','b');}else if(!supaReady){supaSubscribe();toast('↻ Reconnecting…','b');}else{supaPullRaceData();toast('↻ Pulling latest…','b');}}" title="Tap to reconnect or pull latest data"></span>
     <span class="clk" id="clock">--:--:--</span>
   </div>
 
@@ -1475,7 +1475,8 @@ function load(){
     if(entries.length!==before){ localStorage.setItem(SK_E,JSON.stringify(entries)); }
   }
   autoLinkTeams();
-  if(raceCode&&navigator.onLine) setTimeout(()=>{initSupabase();setTimeout(supaPullRaceData,1500);},500);
+  // On reload: only reconnect if this is a hub or an online marshal (not standalone)
+  if(raceCode&&navigator.onLine&&(isHub||marshalOnline)) setTimeout(()=>{initSupabase();setTimeout(supaPullRaceData,1500);},500);
 }
 const saveE=(skipQueue=false)=>{
   localStorage.setItem(SK_E,JSON.stringify(entries));
@@ -3690,7 +3691,7 @@ function updateHdrPoint(){
     if(isHub){ modeBadge.style.display='none'; }
     else {
       modeBadge.style.display='inline';
-      modeBadge.textContent=marshalOnline?'📡 Online':'📴 Offline';
+      modeBadge.textContent=marshalOnline?'📡 Online':'📴 Standalone';
       modeBadge.style.background=marshalOnline?'#1a7a3a':'#8a4000';
     }
   }
@@ -3715,7 +3716,11 @@ function updateHdrPoint(){
   const marshalNotice=document.getElementById('runners-marshal-notice');
   if(marshalNotice) marshalNotice.style.display=isHub?'none':'block';
   updateSetupPanel();
-  if(raceCode&&!supaReady&&navigator.onLine) initSupabase();
+  // Only reconnect for hub or online marshal — standalone never touches Supabase after setup
+  if(raceCode&&!supaReady&&navigator.onLine&&(isHub||marshalOnline)) initSupabase();
+  // Hide the live/offline status indicator for standalone (it's meaningless there)
+  const supaEl=document.getElementById('supa-status');
+  if(supaEl) supaEl.style.display=(!isHub&&!marshalOnline)?'none':'';
 }
 function updateSetupPanel(){
   // Refresh the marshal setup panel info
@@ -5051,6 +5056,9 @@ function supaSubscribe(){
       } else if(status==='CLOSED'){
         supaReady=false;
         updateSupaStatus('offline');
+        // CLOSED often means the WebSocket dropped (screen sleep, background, network blip).
+        // Schedule a reconnect — the channel is gone, supaSubscribe() will rebuild it.
+        if(raceCode) setTimeout(supaSubscribe, 5000);
       } else {
         updateSupaStatus('connected');
       }
@@ -5284,10 +5292,35 @@ function updateSupaStatus(s){
 // ── Online/offline detection ──────────────────────────────────────────────
 window.addEventListener('online',()=>{
   if(raceCode&&!supaReady) initSupabase();
-  else if(supaReady) supaFlushQueue();
-  updateSupaStatus('live');
+  else if(raceCode&&supaReady) supaFlushQueue(); // flush any queued entries on reconnect
+  updateSupaStatus(supaReady?'live':'connected');
 });
-window.addEventListener('offline',()=>updateSupaStatus('offline'));
+window.addEventListener('offline',()=>{supaReady=false; updateSupaStatus('offline');});
+
+// ── Reconnect on tab visibility restore ───────────────────────────────────
+// When the phone screen wakes / tab is foregrounded, the WebSocket is usually dead.
+// Re-subscribe if we have a race code and the channel is not currently live.
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState!=='visible'||!raceCode) return;
+  if(!supaReady||!_realtimeSub){
+    if(!supa) initSupabase();
+    else supaSubscribe();
+  } else {
+    // Channel claims to be live — flush any queued entries that built up while hidden
+    supaFlushQueue();
+  }
+});
+
+// ── Periodic reconnect heartbeat ─────────────────────────────────────────
+// Every 30s, if we have a race code but are offline, try to reconnect.
+// Catches silent channel drops that never fire a status callback.
+setInterval(()=>{
+  if(!raceCode||supaReady) return;
+  if(navigator.onLine){
+    if(!supa) initSupabase();
+    else supaSubscribe();
+  }
+}, 30000);
 
 // ── Race code helpers ─────────────────────────────────────────────────────
 function generateRaceCode(){
@@ -5399,19 +5432,58 @@ async function supaPullRaceData(){
 // { v:1, race, device, deviceId, exported, entries:[], runners:[], syncId }
 
 function openSyncModal(){
+  const isStandalone = !isHub && !marshalOnline;
   document.getElementById('net-race-code').textContent = raceCode||'Not set';
   document.getElementById('net-this-point').textContent = (isHub?'🖥 Hub — ':'📍 ') + (timingPoint||'Unknown');
-  document.getElementById('net-status-label').textContent = supaReady ? '● Live' : '○ Offline';
-  document.getElementById('net-status-label').style.color = supaReady ? '#1a7a3a' : 'var(--mut)';
+
+  if(isStandalone){
+    document.getElementById('net-status-label').textContent = '📴 Standalone';
+    document.getElementById('net-status-label').style.color = '#8a4000';
+  } else {
+    document.getElementById('net-status-label').textContent = supaReady ? '● Live' : '○ Offline';
+    document.getElementById('net-status-label').style.color = supaReady ? '#1a7a3a' : 'var(--mut)';
+  }
 
   const online = navigator.onLine && supaReady;
 
+  const hubSec=document.getElementById('sync-hub-section');
+  const marshalSec=document.getElementById('sync-marshal-section');
+  let standaloneSec=document.getElementById('sync-standalone-section');
+
+  // Create standalone section on first use (injected once into the modal)
+  if(!standaloneSec){
+    standaloneSec=document.createElement('div');
+    standaloneSec.id='sync-standalone-section';
+    standaloneSec.style.cssText='display:none;flex-direction:column;gap:10px;';
+    standaloneSec.innerHTML=`
+      <div style="background:#fff8ee;border:2px solid #d4aa60;border-radius:10px;padding:14px;">
+        <div style="font-size:.7rem;font-weight:900;text-transform:uppercase;letter-spacing:1px;color:#7a4000;margin-bottom:6px;">📴 Standalone Mode</div>
+        <div style="font-size:.73rem;color:#7a4000;line-height:1.5;margin-bottom:10px;">This device is <strong>not connected to a race hub.</strong> Times are stored locally only — nothing is sent or received over the network.</div>
+        <div style="font-size:.7rem;font-weight:700;color:#7a4000;margin-bottom:6px;">To share your results with the hub operator:</div>
+        <button onclick="expJSON()" style="width:100%;padding:11px;background:#8a4000;color:#fff;border:none;border-radius:7px;font-weight:700;font-size:.8rem;cursor:pointer;">📤 Export Results as JSON</button>
+        <div style="font-size:.65rem;color:#9a6000;margin-top:6px;text-align:center;">Send the JSON file to your hub operator — they can import it via the Network panel.</div>
+      </div>
+      <div id="standalone-fresh-section" style="background:#fdf0f0;border:1px solid #c08080;border-radius:8px;padding:10px;">
+        <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#901818;margin-bottom:3px;">↺ Rejoin Race (Fresh Start)</div>
+        <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Clears <strong>this device's</strong> entries and returns to setup. Does not affect any data already received by the hub.</div>
+        <div id="standalone-fresh-confirm" style="display:none;background:#f5dede;border:1px solid #b02020;border-radius:5px;padding:10px;margin-bottom:6px;">
+          <div style="font-size:.75rem;font-weight:700;color:#901818;margin-bottom:8px;">⚠ Are you sure? Local entries on this device will be cleared.</div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn" onclick="document.getElementById('standalone-fresh-confirm').style.display='none';document.getElementById('standalone-fresh-btn').style.display='block';" style="flex:1;padding:8px;">Cancel</button>
+            <button class="btn red" onclick="marshalFreshStart()" style="flex:1;padding:8px;background:#b02020;color:#fff;">Yes, Rejoin</button>
+          </div>
+        </div>
+        <button class="btn red" id="standalone-fresh-btn" onclick="document.getElementById('standalone-fresh-confirm').style.display='block';this.style.display='none';" style="width:100%;padding:10px;font-size:.78rem;">↺ Rejoin Race (this device only)</button>
+      </div>`;
+    // Insert before the "Connected timing points" section
+    const connectedSection = marshalSec.parentNode.querySelector('div[style*="border-top"]');
+    marshalSec.parentNode.insertBefore(standaloneSec, connectedSection||marshalSec.nextSibling);
+  }
+
   if(isHub){
-    // Show hub section, hide marshal section
-    const hubSec=document.getElementById('sync-hub-section');
     if(hubSec) hubSec.style.display='flex';
-    const marshalSec=document.getElementById('sync-marshal-section');
     if(marshalSec) marshalSec.style.display='none';
+    if(standaloneSec) standaloneSec.style.display='none';
 
     // Queue status
     const qLen=_uploadQueue.length;
@@ -5436,12 +5508,23 @@ function openSyncModal(){
     const pushStatus=document.getElementById('hub-push-status');
     if(pushStatus&&!pushStatus.textContent) pushStatus.textContent='';
 
-  } else {
-    // Show marshal section, hide hub section
-    const hubSec=document.getElementById('sync-hub-section');
+  } else if(isStandalone){
+    // Standalone — no hub connection, export only
     if(hubSec) hubSec.style.display='none';
-    const marshalSec=document.getElementById('sync-marshal-section');
+    if(marshalSec) marshalSec.style.display='none';
+    if(standaloneSec) standaloneSec.style.display='flex';
+
+    // Reset fresh-start confirm state
+    const sfc=document.getElementById('standalone-fresh-confirm');
+    const sfb=document.getElementById('standalone-fresh-btn');
+    if(sfc) sfc.style.display='none';
+    if(sfb) sfb.style.display='block';
+
+  } else {
+    // Online marshal
+    if(hubSec) hubSec.style.display='none';
     if(marshalSec) marshalSec.style.display='flex';
+    if(standaloneSec) standaloneSec.style.display='none';
 
     // Marshal RECEIVE button state
     const refreshBtn=document.getElementById('sync-refresh-btn-marshal');
@@ -5456,7 +5539,12 @@ function openSyncModal(){
     if(fsb) fsb.style.display='block';
   }
 
-  loadConnectedPoints();
+  // Only query timing_points for connected devices (hub & online marshal)
+  if(!isStandalone) loadConnectedPoints();
+  else {
+    const el=document.getElementById('net-points-list');
+    if(el) el.innerHTML='<div style="font-size:.75rem;color:var(--mut2);font-style:italic;">Not connected to a race</div>';
+  }
   showOvl('ovl-sync');
 }
 
