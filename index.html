@@ -496,9 +496,10 @@ tbody tr.rdata:active{background:#f0f0ea;}
         <button onclick="toggleMarshalManual()" style="background:none;border:none;color:var(--mut);font-size:.72rem;cursor:pointer;text-decoration:underline;" id="marshal-manual-toggle">Running standalone (no hub) — set up manually</button>
       </div>
 
-      <!-- Admin link -->
-      <div style="text-align:center;margin-top:4px;padding-top:14px;border-top:1px solid var(--bdr2);">
-        <button onclick="switchSetupMode('admin')" style="background:none;border:none;color:var(--acc);font-size:.75rem;font-weight:600;cursor:pointer;">⚙ Race Admin / Hub Setup →</button>
+      <!-- Hub recovery / admin links -->
+      <div style="text-align:center;margin-top:4px;padding-top:14px;border-top:1px solid var(--bdr2);display:flex;flex-direction:column;gap:8px;">
+        <button onclick="showHubRejoinPrompt()" style="background:#1a4a8a;border:none;color:#fff;font-size:.78rem;font-weight:700;cursor:pointer;border-radius:8px;padding:10px 16px;">🔄 I'm the hub — reconnect to existing race</button>
+        <button onclick="switchSetupMode('admin')" style="background:none;border:none;color:var(--acc);font-size:.72rem;cursor:pointer;text-decoration:underline;">⚙ Set up a new race (Hub Admin)</button>
       </div>
     </div>
   </div>
@@ -3452,6 +3453,81 @@ async function completeAdminSetup(){
   localStorage.setItem('mtn_stations_v1',JSON.stringify(_adminStations));
   _finishSetup({race, point:'Hub', newCode:code, hub:true});
   setTimeout(publishStationListToSupa, 1500);
+}
+
+async function showHubRejoinPrompt(){
+  // Show a simple dialog: just enter the race code, we'll look it up and rejoin
+  const existing=document.getElementById('hub-rejoin-prompt');
+  if(existing) existing.remove();
+  const d=document.createElement('div');
+  d.id='hub-rejoin-prompt';
+  d.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  d.innerHTML=`
+    <div style="background:#fff;border-radius:12px;padding:20px;max-width:340px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.3);">
+      <div style="font-size:1rem;font-weight:700;color:#1a4a8a;margin-bottom:6px;">🔄 Reconnect Hub</div>
+      <div style="font-size:.75rem;color:#555;margin-bottom:14px;">Enter your race code to reconnect this device as the hub.</div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:12px;">
+        <input id="hub-rejoin-alpha" class="fld" type="text" placeholder="ABC" maxlength="3"
+          style="font-size:1.1rem;text-transform:uppercase;letter-spacing:3px;font-family:'DM Mono',monospace;width:72px;text-align:center;"
+          oninput="this.value=this.value.replace(/[^A-Za-z]/g,'').toUpperCase()">
+        <span style="font-size:1.2rem;color:#1a4a8a;font-weight:700;">-</span>
+        <input id="hub-rejoin-num" class="fld" type="text" placeholder="001" maxlength="3"
+          style="font-size:1.1rem;letter-spacing:3px;font-family:'DM Mono',monospace;width:72px;text-align:center;"
+          oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+      </div>
+      <div id="hub-rejoin-err" style="color:var(--red);font-size:.72rem;min-height:16px;margin-bottom:8px;"></div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <button id="hub-rejoin-btn" onclick="doHubRejoin()"
+          style="background:#1a7a3a;color:#fff;border:none;border-radius:8px;padding:12px;font-size:.85rem;font-weight:700;cursor:pointer;">
+          🔄 Find & Reconnect
+        </button>
+        <button onclick="document.getElementById('hub-rejoin-prompt').remove();"
+          style="background:#eee;color:#333;border:none;border-radius:8px;padding:10px;font-size:.8rem;cursor:pointer;">
+          Cancel
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(d);
+  setTimeout(()=>document.getElementById('hub-rejoin-alpha')?.focus(),100);
+}
+
+async function doHubRejoin(){
+  const alpha=(document.getElementById('hub-rejoin-alpha')?.value||'').trim().toUpperCase();
+  const num=(document.getElementById('hub-rejoin-num')?.value||'').trim();
+  const errEl=document.getElementById('hub-rejoin-err');
+  const btn=document.getElementById('hub-rejoin-btn');
+  if(!alpha||!num){ if(errEl) errEl.textContent='Enter your full race code (e.g. ABC-001)'; return; }
+  const code=`${alpha}-${num}`;
+  if(btn){ btn.disabled=true; btn.textContent='⏳ Looking up…'; }
+  if(errEl) errEl.textContent='';
+  try{
+    const sbv=supa||(window.supabase?.createClient?.(SUPA_URL,SUPA_KEY));
+    if(!sbv){ if(errEl) errEl.textContent='No network connection.'; if(btn){btn.disabled=false;btn.textContent='🔄 Find & Reconnect';} return; }
+    // Look up the manifest
+    const {data:manifest}=await sbv.from('timing_points')
+      .select('meta').eq('race_code',code).eq('device_id','hub-stations-manifest').single();
+    if(!manifest?.meta){ if(errEl) errEl.textContent=`No hub found for race ${code}. Check the code.`; if(btn){btn.disabled=false;btn.textContent='🔄 Find & Reconnect';} return; }
+    let storedStations=[];
+    try{ storedStations=JSON.parse(manifest.meta); }catch(e){}
+    const {data:raceRow}=await sbv.from('races').select('name').eq('race_code',code).maybeSingle();
+    const raceName_=(raceRow?.name)||code;
+    // Remove the prompt, show the rejoin dialog
+    document.getElementById('hub-rejoin-prompt').remove();
+    const confirmed=await showRejoinDialog(code, raceName_, storedStations);
+    if(confirmed==='rejoin'){
+      _adminStations=storedStations.map((s,i)=>({name:s.name,slug:s.slug,isFinish:!!s.isFinish,order:i}));
+      saveStations();
+      localStorage.setItem('mtn_stations_v1',JSON.stringify(_adminStations));
+      _hubRejoin=true;
+      _finishSetup({race:raceName_, point:'Hub', newCode:code, hub:true});
+      setTimeout(publishStationListToSupa,1500);
+    }
+    // 'fresh' or 'cancel' — do nothing, setup screen still showing
+  }catch(e){
+    console.warn('doHubRejoin failed',e);
+    if(errEl) errEl.textContent='Error connecting — check your network and try again.';
+    if(btn){btn.disabled=false;btn.textContent='🔄 Find & Reconnect';}
+  }
 }
 
 function showRejoinDialog(code, raceName, stations){
