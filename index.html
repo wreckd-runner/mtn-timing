@@ -2873,6 +2873,9 @@ async function completeMarshalSetup(){
               err.textContent=`⚠ Station code not recognised. The hub hasn't created a station with this code. Ask your hub operator for the correct QR code or station code.`;
               return;
             }
+            // Use the station's FULL NAME (not slug) as the timing point
+            // so hub can match entries by station name, not slug
+            point=match.name;
           }
         }
       }
