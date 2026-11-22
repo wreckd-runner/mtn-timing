@@ -2454,7 +2454,8 @@ function renderHubResults(){
   // Build station groups
   const bodyEl=document.getElementById('hub-results-body');
   if(bodyEl){
-    if(!allFinish.length){
+    const hasAnyEntries=displayStations.some(s=>(byStation[s]||[]).length>0);
+    if(!hasAnyEntries){
       bodyEl.innerHTML=`<div class="empty" style="padding:30px 0;"><div class="ei">📡</div><p>No splits received yet — waiting for aid stations</p></div>`;
     } else {
       bodyEl.innerHTML=displayStations.map(station=>{
@@ -4853,9 +4854,11 @@ async function resetAll(){
   const code=raceCode; // capture before clearing
   entries=[]; runners=[];
   window._remoteSplits={};
+  _adminStations=[]; _marshalImports={};
   saveE(); saveR();
-  // Clear upload queue for this race
+  // Clear all local race state
   _uploadQueue=[]; localStorage.removeItem('rt_upload_queue');
+  localStorage.removeItem(SK_STATIONS); localStorage.removeItem(SK_IMPORTS);
   // Unsubscribe from realtime
   if(_realtimeSub&&supa){supa.removeChannel(_realtimeSub);_realtimeSub=null;}
   supaReady=false; supa=null;
@@ -4867,19 +4870,19 @@ async function resetAll(){
   switchSetupMode('marshal');
   document.getElementById('setup-screen').style.display='block';
   document.getElementById('app').style.visibility='hidden';
-  // Delete this race's data from Supabase (scoped to race code only)
+  // Delete ALL race data from Supabase for this race code — entries from all devices,
+  // all runners, all timing_points rows, and the stations manifest.
   if(code&&window.supabase){
     try{
       const sb=window.supabase.createClient(SUPA_URL,SUPA_KEY);
-      await sb.from('entries').delete().eq('race_code',code).eq('device_id',deviceId);
+      await sb.from('entries').delete().eq('race_code',code);
       await sb.from('runners').delete().eq('race_code',code);
-      await sb.from('timing_points').delete().eq('race_code',code).eq('device_id',deviceId);
-      // Only delete the race row if this device was the hub
-      // Other races are completely untouched
-      console.log('Supabase cleanup done for race:',code);
+      await sb.from('timing_points').delete().eq('race_code',code);
+      await sb.from('races').delete().eq('race_code',code);
+      console.log('Supabase full cleanup done for race:',code);
     } catch(e){ console.warn('Supabase cleanup error:',e); }
   }
-  toast('🔄 App reset — configure timing point','y');
+  toast('🔄 Race reset — all data cleared','y');
 }
 
 
