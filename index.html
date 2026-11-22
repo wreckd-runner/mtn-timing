@@ -16,7 +16,7 @@
 <script>
 // ── PWA Service Worker ─────────────────────────────────────────────────────
 // Single cache name — used by SW and the manual pre-cache below
-const MTN_CACHE = 'mtn-v6';
+const MTN_CACHE = 'mtn-v7';
 const MTN_CDN = [
   'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
@@ -25,7 +25,7 @@ const MTN_CDN = [
 
 if('serviceWorker' in navigator){
   const swCode = `
-const CACHE = 'mtn-v6';
+const CACHE = 'mtn-v7';
 const CDN = [
   'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js',
@@ -1119,16 +1119,16 @@ tbody tr.rdata:active{background:#f0f0ea;}
 
       <!-- Marshal-only: fresh start -->
       <div id="marshal-fresh-start" style="background:#fdf0f0;border:1px solid #c08080;border-radius:8px;padding:10px;">
-        <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#901818;margin-bottom:5px;">↺ Fresh Start</div>
-        <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Clears your entries and disconnects from the race. <strong>Does not affect the hub or other devices.</strong></div>
+        <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#901818;margin-bottom:3px;">↺ Rejoin Race (Fresh Start)</div>
+        <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Clears <strong>this device's</strong> entries and returns to setup so you can re-enter your station code. <strong>Does not affect the hub, other devices, or any data already received by the hub.</strong> Use this if you need to change stations or swap devices mid-race.</div>
         <div id="fresh-start-confirm" style="display:none;background:#f5dede;border:1px solid #b02020;border-radius:5px;padding:10px;margin-bottom:6px;">
-          <div style="font-size:.75rem;font-weight:700;color:#901818;margin-bottom:8px;">⚠ Are you sure? This cannot be undone.</div>
+          <div style="font-size:.75rem;font-weight:700;color:#901818;margin-bottom:8px;">⚠ Are you sure? Local entries on this device will be cleared.</div>
           <div style="display:flex;gap:6px;">
             <button class="btn" onclick="document.getElementById('fresh-start-confirm').style.display='none';document.getElementById('fresh-start-btn').style.display='block';" style="flex:1;padding:8px;">Cancel</button>
-            <button class="btn red" onclick="marshalFreshStart()" style="flex:1;padding:8px;background:#b02020;color:#fff;">Yes, Fresh Start</button>
+            <button class="btn red" onclick="marshalFreshStart()" style="flex:1;padding:8px;background:#b02020;color:#fff;">Yes, Rejoin</button>
           </div>
         </div>
-        <button class="btn red" id="fresh-start-btn" onclick="document.getElementById('fresh-start-confirm').style.display='block';this.style.display='none';" style="width:100%;padding:10px;font-size:.78rem;">↺ Fresh Start (this device only)</button>
+        <button class="btn red" id="fresh-start-btn" onclick="document.getElementById('fresh-start-confirm').style.display='block';this.style.display='none';" style="width:100%;padding:10px;font-size:.78rem;">↺ Rejoin Race (this device only)</button>
       </div>
     </div>
 
@@ -1145,6 +1145,7 @@ tbody tr.rdata:active{background:#f0f0ea;}
 
     <!-- Full system reset (always available) -->
     <div style="border-top:1px solid var(--bdr2);padding-top:8px;margin-top:4px;">
+      <div style="font-size:.68rem;color:var(--mut);margin-bottom:5px;text-align:center;">Full System Reset wipes <em>everything</em> on this device — use only to start completely fresh or change device role (e.g. marshal → hub).</div>
       <button onclick="closeOvl('ovl-sync');document.getElementById('ovl-full-reset').style.display='flex';" style="width:100%;padding:10px;font-size:.75rem;background:none;border:1px solid #901818;color:#901818;border-radius:7px;cursor:pointer;font-weight:600;">⚠️ Full System Reset…</button>
     </div>
   </div>
@@ -2428,8 +2429,22 @@ function renderHubResults(){
     : allFinish.length;
   const dnfCount=runners.filter(r=>r.status==='DNF').length;
   const dnsCount=runners.filter(r=>r.status==='DNS').length;
+  // "Still Out" = started (not DNS), no finish recorded at the finish line,
+  // and not confirmed DNF by the hub. A marshal's local DNF tag is advisory —
+  // the runner may have been timed at that point but could still be moving.
+  // We include DNF runners who have an aid-station split but no finish, so they
+  // remain visible on the hub's field view rather than silently disappearing.
+  const finishStationSlug=_adminStations.find(s=>s.isFinish)?.slug||null;
+  const finishedAtFinishLine=new Set(
+    Object.values(window._remoteSplits||{})
+      .concat(entries.filter(e=>e.type==='finish'))
+      .filter(e=>!finishStationSlug||(e.device||timingPoint)===(_adminStations.find(s=>s.isFinish)?.name||timingPoint))
+      .map(e=>baseBib(e.bib))
+  );
+  // Also include own entries at the finish timing point
+  entries.filter(e=>e.type==='finish').forEach(e=>finishedAtFinishLine.add(baseBib(e.bib)));
   const stillOut=runners.length
-    ? runners.filter(r=>!finishedBibs.has(r.bib)&&r.status!=='DNF'&&r.status!=='DNS')
+    ? runners.filter(r=>r.status!=='DNS'&&!finishedAtFinishLine.has(baseBib(r.bib)))
     : [];
   const flagCount=allFinish.filter(e=>e.hasFlag).length;
 
@@ -2501,10 +2516,12 @@ function renderHubResults(){
             ?`<span style="font-size:.7rem;color:var(--mut);">Last seen: 📍 ${esc(ls.station)} @ ${ls.time}</span>`
             :`<span style="font-size:.7rem;color:var(--mut);">Not yet recorded at any station</span>`;
           const condBadge=r.conditions?`<span style="font-size:.6rem;background:#fff3e0;color:#8a4000;border-radius:3px;padding:1px 5px;margin-left:4px;">⚠ ${esc(r.conditions.substring(0,20))}${r.conditions.length>20?'…':''}</span>`:'';
-          return `<div style="display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr2);gap:6px;">
+          const dnfBadge=(r.status==='DNF'||r.status==='DNS')
+            ?`<span style="font-size:.58rem;font-weight:700;background:${r.status==='DNF'?'#f5dede':'#fff4cc'};color:${r.status==='DNF'?'#901818':'#6a5000'};border-radius:3px;padding:1px 5px;margin-left:4px;">${r.status} (reported)</span>`:'';
+          return `<div style="display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--bdr2);gap:6px;${r.status?'opacity:.8;':''}">
             <div style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:900;min-width:52px;">${esc(r.bib)}</div>
             <div style="flex:1;min-width:0;">
-              <div style="font-size:.8rem;font-weight:600;">${esc(r.name||'—')}${condBadge}</div>
+              <div style="font-size:.8rem;font-weight:600;">${esc(r.name||'—')}${condBadge}${dnfBadge}</div>
               <div>${lastInfo}</div>
             </div>
             ${r.distance?`<div style="font-size:.62rem;background:var(--surf2);border-radius:3px;padding:2px 5px;flex-shrink:0;">${esc(r.distance)}</div>`:''}
@@ -3611,7 +3628,16 @@ function savePointSettings(){
   const r=document.getElementById('point-race').value.trim();
   const p=document.getElementById('point-name').value.trim();
   if(!p){toast('Timing point name required','r');return;}
-  raceName=r||raceName; timingPoint=p; isHub=document.getElementById('point-hub').checked;
+  raceName=r||raceName; timingPoint=p;
+  // Marshals (non-hub devices) cannot promote themselves to hub mid-race —
+  // that would let an aid station silently take over the hub role and corrupt the race.
+  // Hub can be set freely; marshal → hub change requires a Full Reset.
+  if(!isHub && document.getElementById('point-hub').checked){
+    toast('⛔ Cannot switch to Hub mode while set up as a timing point. Use Full Reset to start over as Hub.','r');
+    document.getElementById('point-hub').checked=false;
+  } else {
+    isHub=document.getElementById('point-hub').checked;
+  }
   syncPointCode(); const newCode=document.getElementById('point-code').value.trim().toUpperCase();
   if(newCode&&newCode!==raceCode){
     // Race code changed — clear local session data
