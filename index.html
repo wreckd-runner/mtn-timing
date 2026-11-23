@@ -2913,9 +2913,25 @@ async function mscFetchStations(){
       console.log('mscFetch stations:',_mscStations);
       mscRenderDropdown(_mscStations.length?'stations':'empty');
     } else {
-      // No manifest found — race code doesn't exist or hub hasn't published yet
-      mscRenderDropdown('notfound');
-      _mscLastPrefix=''; // allow retry on refocus
+      // No manifest yet — fall back to scanning timing_points rows for this race
+      console.log('mscFetch: no manifest, scanning timing_points for',prefix);
+      const {data:rows, error:rowErr}=await sb.from('timing_points')
+        .select('device_id,meta').eq('race_code',prefix).neq('device_id','hub-stations-manifest');
+      console.log('mscFetch fallback rows:',rows,'err:',rowErr);
+      if(rows&&rows.length){
+        // Each row's device_id is the station slug (set by the hub on registration)
+        _mscStations=rows
+          .filter(r=>r.device_id&&r.device_id!=='hub')
+          .map(r=>{
+            let name=r.device_id;
+            try{ const m=JSON.parse(r.meta||'{}'); if(m.name) name=m.name; }catch(e){}
+            return {name, slug:r.device_id};
+          });
+        mscRenderDropdown(_mscStations.length?'stations':'notfound');
+      } else {
+        mscRenderDropdown('notfound');
+        _mscLastPrefix='';
+      }
     }
   } catch(e){
     console.error('mscFetch error:',e);
@@ -3081,8 +3097,23 @@ async function completeMarshalSetup(){
           _mscStations=stationsToCheck;
           _mscLastPrefix=newCode;
         } else {
-          err.textContent='⚠ Race code not found. Check the code and try again.';
-          return;
+          // No manifest — scan timing_points rows as fallback
+          const {data:rows}=await sbv.from('timing_points')
+            .select('device_id,meta').eq('race_code',newCode).neq('device_id','hub-stations-manifest');
+          if(rows&&rows.length){
+            stationsToCheck=rows
+              .filter(r=>r.device_id&&r.device_id!=='hub')
+              .map(r=>{
+                let name=r.device_id;
+                try{ const m=JSON.parse(r.meta||'{}'); if(m.name) name=m.name; }catch(e){}
+                return {name, slug:r.device_id};
+              });
+            _mscStations=stationsToCheck;
+            _mscLastPrefix=newCode;
+          } else {
+            err.textContent='⚠ Race code not found. Check the code and try again.';
+            return;
+          }
         }
       }catch(e){
         console.error('completeMarshalSetup validation error:',e);
@@ -5268,6 +5299,8 @@ function supaSubscribe(){
       if(status==='SUBSCRIBED'){
         supaReady=true;
         updateSupaStatus('live');
+        // Hub: publish station manifest so marshals can discover stations
+        if(isHub&&_adminStations.length) setTimeout(publishStationListToSupa, 500);
         // Now flush any queued items
         supaFlushQueue();
       } else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'){
@@ -5573,6 +5606,8 @@ function syncRaceCode(){
 async function supaPullRaceData(){
   if(!supa||!raceCode) return;
   localStorage.setItem('mtn_last_pull', Date.now().toString());
+  // Hub: re-publish station manifest on every pull so marshals can always find stations
+  if(isHub&&_adminStations.length) publishStationListToSupa();
   // Pull runners (participant list from hub)
   const {data:rData}=await supa.from('runners').select('*').eq('race_code',raceCode);
   if(rData?.length){
