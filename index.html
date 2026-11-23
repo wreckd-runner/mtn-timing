@@ -434,11 +434,26 @@ tbody tr.rdata:active{background:#f0f0ea;}
       <!-- Station code entry -->
       <div style="background:#ddf0ee;border:1px solid #006b5e;border-radius:8px;padding:14px;">
         <label class="flbl" style="color:#006b5e;margin-top:0;">Station Code</label>
-        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
-          <input class="fld" type="text" id="marshal-station-code" placeholder="e.g. MKA-001-START"
-            style="font-size:1rem;text-transform:uppercase;letter-spacing:2px;font-family:'DM Mono',monospace;flex:1;text-align:center;"
-            oninput="this.value=this.value.toUpperCase();parseMarshalCode(this.value)">
-          <button onclick="openSetupQRScan()" style="background:#006b5e;border:none;color:#fff;border-radius:7px;padding:10px 12px;font-size:1.1rem;cursor:pointer;flex-shrink:0;" title="Scan QR code">📷</button>
+        <!-- Hidden combined field — written by QR scan and read by completeMarshalSetup -->
+        <input type="hidden" id="marshal-station-code">
+        <!-- Three-segment input -->
+        <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
+          <input class="fld" type="text" id="msc-seg1" placeholder="ABC" maxlength="3"
+            style="font-size:1.1rem;text-transform:uppercase;letter-spacing:3px;font-family:'DM Mono',monospace;width:0;flex:1;text-align:center;padding:10px 4px;"
+            oninput="mscInput(this,1)" onkeydown="mscKey(event,1)">
+          <span style="font-size:1.2rem;color:#006b5e;font-weight:700;flex-shrink:0;">-</span>
+          <input class="fld" type="text" id="msc-seg2" placeholder="001" maxlength="3"
+            style="font-size:1.1rem;text-transform:uppercase;letter-spacing:3px;font-family:'DM Mono',monospace;width:0;flex:1;text-align:center;padding:10px 4px;"
+            oninput="mscInput(this,2)" onkeydown="mscKey(event,2)">
+          <span style="font-size:1.2rem;color:#006b5e;font-weight:700;flex-shrink:0;">-</span>
+          <!-- Segment 3: text input + dropdown overlay -->
+          <div style="position:relative;flex:1.4;">
+            <input class="fld" type="text" id="msc-seg3" placeholder="STATION" maxlength="12"
+              style="font-size:.9rem;text-transform:uppercase;letter-spacing:1px;font-family:'DM Mono',monospace;width:100%;text-align:center;padding:10px 4px;"
+              oninput="mscInput(this,3)" onkeydown="mscKey(event,3)" onfocus="mscShowDropdown()" autocomplete="off">
+            <div id="msc-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:200;background:#fff;border:1px solid #006b5e;border-radius:0 0 7px 7px;box-shadow:0 4px 12px rgba(0,0,0,.15);max-height:180px;overflow-y:auto;"></div>
+          </div>
+          <button onclick="openSetupQRScan()" style="background:#006b5e;border:none;color:#fff;border-radius:7px;padding:10px 11px;font-size:1rem;cursor:pointer;flex-shrink:0;" title="Scan QR code">📷</button>
         </div>
         <div style="font-size:.65rem;color:#006b5e;margin-top:6px;">Scan the QR from your hub operator, or type the code they give you</div>
       </div>
@@ -1118,6 +1133,29 @@ tbody tr.rdata:active{background:#f0f0ea;}
           </div>
         </div>
         <button class="btn red" id="fresh-start-btn" onclick="document.getElementById('fresh-start-confirm').style.display='block';this.style.display='none';" style="width:100%;padding:10px;font-size:.78rem;">↺ Rejoin Race (this device only)</button>
+      </div>
+    </div>
+
+    <!-- ══ STANDALONE SECTION ══ -->
+    <div id="sync-standalone-section" style="display:none;flex-direction:column;gap:10px;">
+      <div style="background:#fff8ee;border:2px solid #d4aa60;border-radius:10px;padding:14px;">
+        <div style="font-size:.7rem;font-weight:900;text-transform:uppercase;letter-spacing:1px;color:#7a4000;margin-bottom:6px;">📴 Standalone Mode</div>
+        <div style="font-size:.73rem;color:#7a4000;line-height:1.5;margin-bottom:10px;">This device is <strong>not connected to a race hub.</strong> Times are stored locally only — nothing is sent or received over the network.</div>
+        <div style="font-size:.7rem;font-weight:700;color:#7a4000;margin-bottom:6px;">To share your results with the hub operator:</div>
+        <button onclick="expJSON()" style="width:100%;padding:11px;background:#8a4000;color:#fff;border:none;border-radius:7px;font-weight:700;font-size:.8rem;cursor:pointer;">📤 Export Results as JSON</button>
+        <div style="font-size:.65rem;color:#9a6000;margin-top:6px;text-align:center;">Send the JSON file to your hub operator — they can import it via the Network panel.</div>
+      </div>
+      <div style="background:#fdf0f0;border:1px solid #c08080;border-radius:8px;padding:10px;">
+        <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#901818;margin-bottom:3px;">↺ Rejoin Race (Fresh Start)</div>
+        <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Clears <strong>this device's</strong> entries and returns to setup. Does not affect any data already received by the hub.</div>
+        <div id="standalone-fresh-confirm" style="display:none;background:#f5dede;border:1px solid #b02020;border-radius:5px;padding:10px;margin-bottom:6px;">
+          <div style="font-size:.75rem;font-weight:700;color:#901818;margin-bottom:8px;">⚠ Are you sure? Local entries on this device will be cleared.</div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn" onclick="document.getElementById('standalone-fresh-confirm').style.display='none';document.getElementById('standalone-fresh-btn').style.display='block';" style="flex:1;padding:8px;">Cancel</button>
+            <button class="btn red" onclick="marshalFreshStart()" style="flex:1;padding:8px;background:#b02020;color:#fff;">Yes, Rejoin</button>
+          </div>
+        </div>
+        <button class="btn red" id="standalone-fresh-btn" onclick="document.getElementById('standalone-fresh-confirm').style.display='block';this.style.display='none';" style="width:100%;padding:10px;font-size:.78rem;">↺ Rejoin Race (this device only)</button>
       </div>
     </div>
 
@@ -2805,6 +2843,136 @@ function updateMarshalOnlineToggleUI(){
   });
 })();
 
+// ── Segmented station-code input ──────────────────────────────────────────
+let _mscStations=[]; // cached stations for current race code prefix
+let _mscLastPrefix=''; // last fetched race code prefix
+
+function mscSync(){
+  // Keep the hidden combined field in sync for the rest of the code that reads it
+  const s1=(document.getElementById('msc-seg1')?.value||'').trim().toUpperCase();
+  const s2=(document.getElementById('msc-seg2')?.value||'').trim().toUpperCase();
+  const s3=(document.getElementById('msc-seg3')?.value||'').trim().toUpperCase();
+  const combined=[s1,s2,s3].filter(Boolean).join('-');
+  const hidden=document.getElementById('marshal-station-code');
+  if(hidden) hidden.value=combined;
+  parseMarshalCode(combined);
+}
+
+function mscInput(el, seg){
+  // Strip non-alphanumeric (keep letters+digits for all segments)
+  el.value=el.value.replace(/[^A-Za-z0-9]/g,'').toUpperCase();
+  mscSync();
+  // Auto-advance to next segment when full
+  if(seg===1 && el.value.length===3) document.getElementById('msc-seg2')?.focus();
+  if(seg===2 && el.value.length===3){ document.getElementById('msc-seg3')?.focus(); mscFetchStations(); }
+  // Hide dropdown if seg3 is cleared
+  if(seg===3 && !el.value){ mscHideDropdown(); }
+}
+
+function mscKey(event, seg){
+  // Backspace on empty field → move back to previous segment
+  if(event.key==='Backspace'){
+    const el=event.target;
+    if(el.value===''&&seg>1){
+      event.preventDefault();
+      document.getElementById(`msc-seg${seg-1}`)?.focus();
+    }
+  }
+  // Enter → submit
+  if(event.key==='Enter'){ mscHideDropdown(); completeMarshalSetup(); }
+  // Dash → advance
+  if(event.key==='-'){
+    event.preventDefault();
+    if(seg===1) document.getElementById('msc-seg2')?.focus();
+    if(seg===2){ document.getElementById('msc-seg3')?.focus(); mscFetchStations(); }
+  }
+}
+
+async function mscFetchStations(){
+  const s1=(document.getElementById('msc-seg1')?.value||'').trim().toUpperCase();
+  const s2=(document.getElementById('msc-seg2')?.value||'').trim().toUpperCase();
+  if(!s1||!s2) return;
+  const prefix=`${s1}-${s2}`;
+  if(prefix===_mscLastPrefix) { mscShowDropdown(); return; } // already fetched
+  _mscLastPrefix=prefix;
+  _mscStations=[];
+  mscSetDropdown(['⏳ Loading stations…'],[]);
+  try{
+    const sb=supa||(window.supabase?.createClient?.(SUPA_URL,SUPA_KEY));
+    if(!sb) throw new Error('no client');
+    const {data:manifest}=await sb.from('timing_points')
+      .select('meta').eq('race_code',prefix).eq('device_id','hub-stations-manifest').maybeSingle();
+    if(manifest?.meta){
+      const stations=JSON.parse(manifest.meta);
+      _mscStations=stations.filter(s=>s.slug||s.name);
+      if(_mscStations.length){
+        mscSetDropdown(_mscStations.map(s=>s.name+(s.isFinish?' 🏁':'')), _mscStations.map(s=>s.slug||s.name));
+      } else {
+        mscSetDropdown(['No stations found for this race code'],[]);
+      }
+    } else {
+      mscSetDropdown(['Race code not found — check with hub operator'],[]);
+      _mscLastPrefix='';
+    }
+  } catch(e){
+    mscSetDropdown(['Could not reach hub — type station code manually'],[]);
+    _mscLastPrefix='';
+  }
+}
+
+function mscSetDropdown(labels, values){
+  const dd=document.getElementById('msc-dropdown');
+  if(!dd) return;
+  if(!labels.length){ mscHideDropdown(); return; }
+  dd.innerHTML=labels.map((lbl,i)=>`
+    <div onclick="mscPick('${(values[i]||'').replace(/'/g,"\\'")}','${lbl.replace(/'/g,"\\'")}')"
+      style="padding:10px 12px;font-size:.82rem;font-family:'DM Mono',monospace;cursor:pointer;border-bottom:1px solid #e0eeec;color:${values[i]?'#004040':'#999'};font-style:${values[i]?'normal':'italic'};"
+      onmouseenter="this.style.background='#ddf0ee'" onmouseleave="this.style.background=''">
+      ${lbl}
+    </div>`).join('');
+  dd.style.display='block';
+}
+
+function mscPick(slug, label){
+  const el=document.getElementById('msc-seg3');
+  if(el){
+    // Use slug for the code but show a clean label (strip the 🏁 emoji)
+    el.value=(slug||label.replace(/ 🏁$/,'')).toUpperCase();
+    el.dispatchEvent(new Event('input'));
+  }
+  mscHideDropdown();
+}
+
+function mscShowDropdown(){
+  const s1=(document.getElementById('msc-seg1')?.value||'').trim();
+  const s2=(document.getElementById('msc-seg2')?.value||'').trim();
+  if(s1.length===3&&s2.length===3) mscFetchStations();
+  const dd=document.getElementById('msc-dropdown');
+  if(dd&&dd.children.length) dd.style.display='block';
+}
+
+function mscHideDropdown(){
+  const dd=document.getElementById('msc-dropdown');
+  if(dd) dd.style.display='none';
+}
+
+// Fill segments from a full code string (used by QR scan)
+function mscSetCode(fullCode){
+  const parts=(fullCode||'').trim().toUpperCase().split('-');
+  const s1El=document.getElementById('msc-seg1');
+  const s2El=document.getElementById('msc-seg2');
+  const s3El=document.getElementById('msc-seg3');
+  if(s1El) s1El.value=parts[0]||'';
+  if(s2El) s2El.value=parts[1]||'';
+  if(s3El) s3El.value=parts.slice(2).join('-')||'';
+  mscSync();
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e=>{
+  if(!e.target.closest('#msc-seg3')&&!e.target.closest('#msc-dropdown')) mscHideDropdown();
+});
+
 function parseMarshalCode(val){
   // Station code format: RACE-POINT  e.g. MKA-001-Start or MKA-001-KM10
   // Race code is always first two segments (ABC-123), point is remainder
@@ -3638,7 +3806,7 @@ function _finishSetup({race,point,newCode,hub,onlineMarshal}){
   updateHdrPoint();
   // Hub defaults to Results (splits view); marshals default to Entry (timing)
   if(isHub) go('results');
-  const modeLabel=isHub?'Hub — registration & results':(marshalOnline?'Online timing point':'Offline timing point');
+  const modeLabel=isHub?'Hub — registration & results':(marshalOnline?'Online timing point':'Standalone timing point');
   toast(`✅ ${isHub?'Hub':timingPoint} — ${modeLabel} ready`,'g');
 }
 
@@ -3669,7 +3837,8 @@ function updateHdrPoint(){
   const hubBadge=document.getElementById('hdr-hub-badge');
   if(hubBadge) hubBadge.style.display=isHub?'inline':'none';
   const supaEl=document.getElementById('supa-status');
-  if(supaEl) supaEl.style.display=raceCode?'inline':'none';
+  // Show live/offline indicator only for hub and online marshal — not standalone
+  if(supaEl) supaEl.style.display=(raceCode&&(isHub||marshalOnline))?'inline':'none';
   const stTab=document.getElementById('tab-stations');
   if(stTab) stTab.style.display=isHub?'flex':'none';
   const setupTab=document.getElementById('tab-setup');
@@ -3718,9 +3887,6 @@ function updateHdrPoint(){
   updateSetupPanel();
   // Only reconnect for hub or online marshal — standalone never touches Supabase after setup
   if(raceCode&&!supaReady&&navigator.onLine&&(isHub||marshalOnline)) initSupabase();
-  // Hide the live/offline status indicator for standalone (it's meaningless there)
-  const supaEl=document.getElementById('supa-status');
-  if(supaEl) supaEl.style.display=(!isHub&&!marshalOnline)?'none':'';
 }
 function updateSetupPanel(){
   // Refresh the marshal setup panel info
@@ -4775,8 +4941,7 @@ function handleQRResult(data){
   resultEl.style.display='block';
   document.getElementById('qrscan-status').textContent='Code detected!';
   if(_qrScanTarget==='station'){
-    const inp=document.getElementById('marshal-station-code');
-    if(inp){ inp.value=data.toUpperCase(); parseMarshalCode(inp.value); }
+    mscSetCode(data);
     setTimeout(closeQRScan,900);
   }
 }
@@ -5450,35 +5615,7 @@ function openSyncModal(){
   const marshalSec=document.getElementById('sync-marshal-section');
   let standaloneSec=document.getElementById('sync-standalone-section');
 
-  // Create standalone section on first use (injected once into the modal)
-  if(!standaloneSec){
-    standaloneSec=document.createElement('div');
-    standaloneSec.id='sync-standalone-section';
-    standaloneSec.style.cssText='display:none;flex-direction:column;gap:10px;';
-    standaloneSec.innerHTML=`
-      <div style="background:#fff8ee;border:2px solid #d4aa60;border-radius:10px;padding:14px;">
-        <div style="font-size:.7rem;font-weight:900;text-transform:uppercase;letter-spacing:1px;color:#7a4000;margin-bottom:6px;">📴 Standalone Mode</div>
-        <div style="font-size:.73rem;color:#7a4000;line-height:1.5;margin-bottom:10px;">This device is <strong>not connected to a race hub.</strong> Times are stored locally only — nothing is sent or received over the network.</div>
-        <div style="font-size:.7rem;font-weight:700;color:#7a4000;margin-bottom:6px;">To share your results with the hub operator:</div>
-        <button onclick="expJSON()" style="width:100%;padding:11px;background:#8a4000;color:#fff;border:none;border-radius:7px;font-weight:700;font-size:.8rem;cursor:pointer;">📤 Export Results as JSON</button>
-        <div style="font-size:.65rem;color:#9a6000;margin-top:6px;text-align:center;">Send the JSON file to your hub operator — they can import it via the Network panel.</div>
-      </div>
-      <div id="standalone-fresh-section" style="background:#fdf0f0;border:1px solid #c08080;border-radius:8px;padding:10px;">
-        <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#901818;margin-bottom:3px;">↺ Rejoin Race (Fresh Start)</div>
-        <div style="font-size:.7rem;color:var(--mut);margin-bottom:6px;">Clears <strong>this device's</strong> entries and returns to setup. Does not affect any data already received by the hub.</div>
-        <div id="standalone-fresh-confirm" style="display:none;background:#f5dede;border:1px solid #b02020;border-radius:5px;padding:10px;margin-bottom:6px;">
-          <div style="font-size:.75rem;font-weight:700;color:#901818;margin-bottom:8px;">⚠ Are you sure? Local entries on this device will be cleared.</div>
-          <div style="display:flex;gap:6px;">
-            <button class="btn" onclick="document.getElementById('standalone-fresh-confirm').style.display='none';document.getElementById('standalone-fresh-btn').style.display='block';" style="flex:1;padding:8px;">Cancel</button>
-            <button class="btn red" onclick="marshalFreshStart()" style="flex:1;padding:8px;background:#b02020;color:#fff;">Yes, Rejoin</button>
-          </div>
-        </div>
-        <button class="btn red" id="standalone-fresh-btn" onclick="document.getElementById('standalone-fresh-confirm').style.display='block';this.style.display='none';" style="width:100%;padding:10px;font-size:.78rem;">↺ Rejoin Race (this device only)</button>
-      </div>`;
-    // Insert before the "Connected timing points" section
-    const connectedSection = marshalSec.parentNode.querySelector('div[style*="border-top"]');
-    marshalSec.parentNode.insertBefore(standaloneSec, connectedSection||marshalSec.nextSibling);
-  }
+  // standaloneSec is static HTML in the modal — just reference it
 
   if(isHub){
     if(hubSec) hubSec.style.display='flex';
