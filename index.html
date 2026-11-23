@@ -450,7 +450,7 @@ tbody tr.rdata:active{background:#f0f0ea;}
           <div style="position:relative;flex:1.4;">
             <input class="fld" type="text" id="msc-seg3" placeholder="STATION" maxlength="12"
               style="font-size:.9rem;text-transform:uppercase;letter-spacing:1px;font-family:'DM Mono',monospace;width:100%;text-align:center;padding:10px 4px;"
-              oninput="mscInput(this,3)" onkeydown="mscKey(event,3)" onfocus="mscShowDropdown()" autocomplete="off">
+              oninput="mscInput(this,3)" onkeydown="mscKey(event,3)" onfocus="mscShowDropdown()" onblur="setTimeout(mscHideDropdown,200)" autocomplete="off">
             <div id="msc-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:200;background:#fff;border:1px solid #006b5e;border-radius:0 0 7px 7px;box-shadow:0 4px 12px rgba(0,0,0,.15);max-height:180px;overflow-y:auto;"></div>
           </div>
           <button onclick="openSetupQRScan()" style="background:#006b5e;border:none;color:#fff;border-radius:7px;padding:10px 11px;font-size:1rem;cursor:pointer;flex-shrink:0;" title="Scan QR code">📷</button>
@@ -2864,7 +2864,7 @@ function mscInput(el, seg){
   mscSync();
   // Auto-advance to next segment when full
   if(seg===1 && el.value.length===3) document.getElementById('msc-seg2')?.focus();
-  if(seg===2 && el.value.length===3){ document.getElementById('msc-seg3')?.focus(); mscFetchStations(); }
+  if(seg===2 && el.value.length===3) document.getElementById('msc-seg3')?.focus();
   // Hide dropdown if seg3 is cleared
   if(seg===3 && !el.value){ mscHideDropdown(); }
 }
@@ -2891,27 +2891,34 @@ function mscKey(event, seg){
 async function mscFetchStations(){
   const s1=(document.getElementById('msc-seg1')?.value||'').trim().toUpperCase();
   const s2=(document.getElementById('msc-seg2')?.value||'').trim().toUpperCase();
-  if(!s1||!s2) return;
+  if(s1.length!==3||s2.length!==3) return;
   const prefix=`${s1}-${s2}`;
-  if(prefix===_mscLastPrefix){ mscRenderDropdown(); return; } // already fetched, just show
+  if(prefix===_mscLastPrefix&&_mscStations.length){ mscRenderDropdown(); return; } // cached — just show
   _mscLastPrefix=prefix;
   _mscStations=[];
   mscRenderDropdown('loading');
+  // If Supabase SDK not loaded yet (e.g. slow CDN on phone), retry up to 3s
+  let attempts=0;
+  while(!window.supabase&&attempts<6){ await new Promise(r=>setTimeout(r,500)); attempts++; }
   try{
-    // Always create a fresh one-off client — supa is null until the race joins
-    if(!window.supabase) throw new Error('Supabase SDK not loaded yet');
+    if(!window.supabase) throw new Error('Supabase SDK not loaded');
     const sb=window.supabase.createClient(SUPA_URL,SUPA_KEY);
-    const {data:manifest}=await sb.from('timing_points')
+    const {data:manifest, error}=await sb.from('timing_points')
       .select('meta').eq('race_code',prefix).eq('device_id','hub-stations-manifest').maybeSingle();
+    console.log('mscFetch',prefix,'manifest:',manifest,'error:',error);
+    if(error) throw error;
     if(manifest?.meta){
       const stations=JSON.parse(manifest.meta);
       _mscStations=stations.filter(s=>s.slug||s.name);
+      console.log('mscFetch stations:',_mscStations);
       mscRenderDropdown(_mscStations.length?'stations':'empty');
     } else {
+      // No manifest found — race code doesn't exist or hub hasn't published yet
       mscRenderDropdown('notfound');
-      _mscLastPrefix=''; // allow retry
+      _mscLastPrefix=''; // allow retry on refocus
     }
   } catch(e){
+    console.error('mscFetch error:',e);
     mscRenderDropdown('error');
     _mscLastPrefix='';
   }
@@ -2926,17 +2933,17 @@ function mscRenderDropdown(state){
     return;
   }
   if(state==='notfound'){
-    dd.innerHTML=`<div style="padding:10px 12px;font-size:.8rem;color:#a04000;font-style:italic;">Race code not found — check with hub operator</div>`;
+    dd.innerHTML=`<div style="padding:10px 12px;font-size:.78rem;color:#888;font-style:italic;">No race found for this code — type your station name manually</div>`;
     dd.style.display='block';
     return;
   }
   if(state==='error'){
-    dd.innerHTML=`<div style="padding:10px 12px;font-size:.8rem;color:#999;font-style:italic;">Could not reach hub — type station code manually</div>`;
+    dd.innerHTML=`<div style="padding:10px 12px;font-size:.78rem;color:#888;font-style:italic;">Could not reach hub — type station name manually</div>`;
     dd.style.display='block';
     return;
   }
   if(state==='empty'){
-    dd.innerHTML=`<div style="padding:10px 12px;font-size:.8rem;color:#999;font-style:italic;">No stations configured yet</div>`;
+    dd.innerHTML=`<div style="padding:10px 12px;font-size:.78rem;color:#888;font-style:italic;">No stations configured yet — type your station name</div>`;
     dd.style.display='block';
     return;
   }
@@ -2969,9 +2976,8 @@ function mscPick(slug, label){
 function mscShowDropdown(){
   const s1=(document.getElementById('msc-seg1')?.value||'').trim();
   const s2=(document.getElementById('msc-seg2')?.value||'').trim();
-  if(s1.length===3&&s2.length===3){
-    mscFetchStations(); // async — will show dropdown when done
-  }
+  if(s1.length!==3||s2.length!==3) return; // race code not complete yet — don't fetch
+  mscFetchStations(); // async — renders dropdown when done
 }
 
 function mscHideDropdown(){
@@ -3047,32 +3053,60 @@ async function completeMarshalSetup(){
   const onlineMarshal=document.getElementById('marshal-online-toggle')?.checked&&!!newCode;
 
   // Validate station code exists in hub's published station list
-  if(newCode && navigator.onLine){
-    try{
-      const sbv=supa||(window.supabase?.createClient?.(SUPA_URL,SUPA_KEY));
-      if(sbv){
-        const raceCodePart=newCode; // e.g. "MKA-001"
-        // Extract the slug portion from the raw station code input
-        const rawInput=(document.getElementById('marshal-station-code')?.value||'').trim().toUpperCase();
-        const rawParts=rawInput.split('-');
-        const slugPart=rawParts.slice(2).join('-'); // e.g. "KM10" from "MKA-001-KM10"
-        const {data:manifest}=await sbv.from('timing_points')
-          .select('meta').eq('race_code',raceCodePart).eq('device_id','hub-stations-manifest').maybeSingle();
-        if(manifest&&manifest.meta){
-          const stations=JSON.parse(manifest.meta);
-          if(stations.length>0){
-            const match=stations.find(s=>(s.slug||'').toUpperCase()===slugPart);
-            if(!match){
-              err.textContent=`⚠ Station code not recognised. The hub hasn't created a station with this code. Ask your hub operator for the correct QR code or station code.`;
-              return;
-            }
-            // Use the station's FULL NAME (not slug) as the timing point
-            // so hub can match entries by station name, not slug
-            point=match.name;
-          }
-        }
+  if(newCode){
+    // If we already fetched stations for this prefix, use that cache
+    const cachedOk=_mscLastPrefix===newCode&&_mscStations.length>0;
+    let stationsToCheck=cachedOk?_mscStations:null;
+
+    if(!stationsToCheck){
+      if(!navigator.onLine){
+        err.textContent='⚠ No internet connection. Connect to WiFi or mobile data to join a race.';
+        return;
       }
-    }catch(e){ /* offline or no manifest — allow through */ }
+      // Fetch manifest now
+      err.textContent='';
+      try{
+        // Wait for Supabase SDK if needed
+        let attempts=0;
+        while(!window.supabase&&attempts<6){ await new Promise(r=>setTimeout(r,500)); attempts++; }
+        if(!window.supabase) throw new Error('SDK not loaded');
+        const sbv=window.supabase.createClient(SUPA_URL,SUPA_KEY);
+        const rawInput=(document.getElementById('marshal-station-code')?.value||'').trim().toUpperCase();
+        const {data:manifest,error}=await sbv.from('timing_points')
+          .select('meta').eq('race_code',newCode).eq('device_id','hub-stations-manifest').maybeSingle();
+        console.log('completeMarshalSetup manifest fetch:',newCode,manifest,error);
+        if(error) throw error;
+        if(manifest?.meta){
+          stationsToCheck=JSON.parse(manifest.meta).filter(s=>s.slug||s.name);
+          _mscStations=stationsToCheck;
+          _mscLastPrefix=newCode;
+        } else {
+          err.textContent='⚠ Race code not found. Check the code and try again.';
+          return;
+        }
+      }catch(e){
+        console.error('completeMarshalSetup validation error:',e);
+        err.textContent='⚠ Could not reach the race hub. Check your internet connection.';
+        return;
+      }
+    }
+
+    // Now validate the slug against the station list
+    const rawInput=(document.getElementById('marshal-station-code')?.value||'').trim().toUpperCase();
+    const rawParts=rawInput.split('-');
+    const slugPart=rawParts.slice(2).join('-');
+    if(stationsToCheck.length>0){
+      const match=stationsToCheck.find(s=>(s.slug||s.name).toUpperCase()===slugPart);
+      if(!match){
+        err.textContent='⚠ Station not recognised. Pick a station from the dropdown or scan the QR code.';
+        // Re-show the dropdown so they can pick
+        mscRenderDropdown();
+        document.getElementById('msc-seg3')?.focus();
+        return;
+      }
+      // Use the station's full name as the timing point
+      point=match.name;
+    }
   }
 
   // If online, check Supabase for a conflicting device at this exact station code
