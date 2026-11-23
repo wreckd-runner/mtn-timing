@@ -2893,43 +2893,66 @@ async function mscFetchStations(){
   const s2=(document.getElementById('msc-seg2')?.value||'').trim().toUpperCase();
   if(!s1||!s2) return;
   const prefix=`${s1}-${s2}`;
-  if(prefix===_mscLastPrefix) { mscShowDropdown(); return; } // already fetched
+  if(prefix===_mscLastPrefix){ mscRenderDropdown(); return; } // already fetched, just show
   _mscLastPrefix=prefix;
   _mscStations=[];
-  mscSetDropdown(['⏳ Loading stations…'],[]);
+  mscRenderDropdown('loading');
   try{
-    const sb=supa||(window.supabase?.createClient?.(SUPA_URL,SUPA_KEY));
-    if(!sb) throw new Error('no client');
+    // Always create a fresh one-off client — supa is null until the race joins
+    if(!window.supabase) throw new Error('Supabase SDK not loaded yet');
+    const sb=window.supabase.createClient(SUPA_URL,SUPA_KEY);
     const {data:manifest}=await sb.from('timing_points')
       .select('meta').eq('race_code',prefix).eq('device_id','hub-stations-manifest').maybeSingle();
     if(manifest?.meta){
       const stations=JSON.parse(manifest.meta);
       _mscStations=stations.filter(s=>s.slug||s.name);
-      if(_mscStations.length){
-        mscSetDropdown(_mscStations.map(s=>s.name+(s.isFinish?' 🏁':'')), _mscStations.map(s=>s.slug||s.name));
-      } else {
-        mscSetDropdown(['No stations found for this race code'],[]);
-      }
+      mscRenderDropdown(_mscStations.length?'stations':'empty');
     } else {
-      mscSetDropdown(['Race code not found — check with hub operator'],[]);
-      _mscLastPrefix='';
+      mscRenderDropdown('notfound');
+      _mscLastPrefix=''; // allow retry
     }
   } catch(e){
-    mscSetDropdown(['Could not reach hub — type station code manually'],[]);
+    mscRenderDropdown('error');
     _mscLastPrefix='';
   }
 }
 
-function mscSetDropdown(labels, values){
+function mscRenderDropdown(state){
   const dd=document.getElementById('msc-dropdown');
   if(!dd) return;
-  if(!labels.length){ mscHideDropdown(); return; }
-  dd.innerHTML=labels.map((lbl,i)=>`
-    <div onclick="mscPick('${(values[i]||'').replace(/'/g,"\\'")}','${lbl.replace(/'/g,"\\'")}')"
-      style="padding:10px 12px;font-size:.82rem;font-family:'DM Mono',monospace;cursor:pointer;border-bottom:1px solid #e0eeec;color:${values[i]?'#004040':'#999'};font-style:${values[i]?'normal':'italic'};"
+  if(state==='loading'){
+    dd.innerHTML=`<div style="padding:10px 12px;font-size:.8rem;color:#999;font-style:italic;">⏳ Looking up stations…</div>`;
+    dd.style.display='block';
+    return;
+  }
+  if(state==='notfound'){
+    dd.innerHTML=`<div style="padding:10px 12px;font-size:.8rem;color:#a04000;font-style:italic;">Race code not found — check with hub operator</div>`;
+    dd.style.display='block';
+    return;
+  }
+  if(state==='error'){
+    dd.innerHTML=`<div style="padding:10px 12px;font-size:.8rem;color:#999;font-style:italic;">Could not reach hub — type station code manually</div>`;
+    dd.style.display='block';
+    return;
+  }
+  if(state==='empty'){
+    dd.innerHTML=`<div style="padding:10px 12px;font-size:.8rem;color:#999;font-style:italic;">No stations configured yet</div>`;
+    dd.style.display='block';
+    return;
+  }
+  // state === 'stations' or undefined (re-render existing _mscStations)
+  if(!_mscStations.length){ dd.style.display='none'; return; }
+  dd.innerHTML=_mscStations.map(s=>{
+    const slug=(s.slug||s.name).toUpperCase();
+    const label=s.name+(s.isFinish?' 🏁':'');
+    const safeSlug=slug.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    const safeLabel=label.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return `<div onclick="mscPick('${safeSlug}','${safeLabel}')"
+      style="padding:10px 12px;font-size:.82rem;font-family:'DM Mono',monospace;cursor:pointer;border-bottom:1px solid #e0eeec;color:#004040;"
       onmouseenter="this.style.background='#ddf0ee'" onmouseleave="this.style.background=''">
-      ${lbl}
-    </div>`).join('');
+      ${label}
+    </div>`;
+  }).join('');
   dd.style.display='block';
 }
 
@@ -2946,9 +2969,9 @@ function mscPick(slug, label){
 function mscShowDropdown(){
   const s1=(document.getElementById('msc-seg1')?.value||'').trim();
   const s2=(document.getElementById('msc-seg2')?.value||'').trim();
-  if(s1.length===3&&s2.length===3) mscFetchStations();
-  const dd=document.getElementById('msc-dropdown');
-  if(dd&&dd.children.length) dd.style.display='block';
+  if(s1.length===3&&s2.length===3){
+    mscFetchStations(); // async — will show dropdown when done
+  }
 }
 
 function mscHideDropdown(){
